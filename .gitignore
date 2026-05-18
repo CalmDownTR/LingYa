@@ -11,3 +11,9 @@ wheels/
 
 # Claude Code
 .claude/
+
+# Data
+data/
+
+# Environment (secrets)
+.env

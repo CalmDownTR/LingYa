@@ -1,0 +1,21 @@
+llm:
+  provider: deepseek           # deepseek | openai | ollama
+  model: deepseek-v4-flash
+  api_key_env: DEEPSEEK_API_KEY
+  api_base_url: https://api.deepseek.com
+  temperature: 0.7
+  max_tokens: 32768
+
+memory:
+  short_term_max_messages: 20
+  long_term_top_k: 5
+  chroma_persist_dir: ./data/chroma
+  embedding_model: ./data/models/bge-small-zh-v1.5
+  compression_enabled: true
+  compression_trigger_messages: 15
+
+personality:
+  reflection_interval_turns: 10
+
+db_path: ./data/lingya.db
+data_dir: ./data
