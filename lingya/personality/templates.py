@@ -10,7 +10,7 @@ Each trait change should be a delta between -0.05 and +0.05.
 
 Example response format:
 {
-  "curiosity": +0.03,
+  "exploration": +0.03,
   "topical_interests_add": ["philosophy"],
   "tone": "slightly more formal"
 }

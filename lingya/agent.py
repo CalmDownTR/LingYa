@@ -56,7 +56,7 @@ class LingYaAgent:
         compressed_summary, recent_messages = self.memory.build_context_for_llm()
 
         # Construct full system prompt
-        system_prompt = self.personality.get_system_prompt()
+        system_prompt = self.personality.get_system_prompt(user_input)
 
         if memories_text:
             system_prompt += f"\n\n## Relevant Past Memories\n{memories_text}"

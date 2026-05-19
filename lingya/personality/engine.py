@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lingya.config import PersonalityConfig
 
-from .model import ActivePersonality, PersonalityAdapter, PersonalityGenome
+from .model import ActivePersonality, PersonalityAdapter, PersonalityGenome, Situation, detect_situation
 from .templates import REFLECTION_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
@@ -31,8 +31,9 @@ class PersonalityEngine:
     def personality(self) -> ActivePersonality:
         return PersonalityAdapter.activate(self._genome)
 
-    def get_system_prompt(self) -> str:
-        return self.personality.to_system_prompt()
+    def get_system_prompt(self, user_input: str = "") -> str:
+        situation = detect_situation(user_input) if user_input else Situation.DEFAULT
+        return PersonalityAdapter.activate(self._genome, situation).to_system_prompt()
 
     async def load(self) -> None:
         data = await self.db.get_personality()

@@ -36,8 +36,9 @@ main.py → CLI → Agent.handle_input() → LLM response
 ### Request lifecycle
 1. Store user message in short-term memory
 2. Search long-term memory (ChromaDB + cosine similarity)
-3. Build system prompt: personality + retrieved memories + compressed summary
-4. Call LLM, store response, compress short-term if needed, log turn
+3. Detect situation from user input (keyword-based), apply trait perturbations
+4. Build system prompt: perturbed personality (behavioral auth language) + retrieved memories + compressed summary
+5. Call LLM, store response, compress short-term if needed, log turn
 
 ### Modules at a glance
 
@@ -48,7 +49,7 @@ main.py → CLI → Agent.handle_input() → LLM response
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
 | `lingya/llm/` | LLM backend | `OpenAICompatBackend` via AsyncOpenAI, single provider interface |
 | `lingya/memory/` | Memory | Short-term (deque), Long-term (ChromaDB), Manager (bridge + compression) |
-| `lingya/personality/` | Personality | Genome (persistent) + Active mask (runtime); evolution is a stub |
+| `lingya/personality/` | Personality | Genome (persistent, 6 traits + 4 switches) + Active mask (runtime, behavioral auth language) + situation detection + perturbation; evolution is a stub |
 | `lingya/ingestion/` | Content ingestion | Chunker, embedder (BGE), loader + tool defs (partially wired) |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, 5 tables |
 
