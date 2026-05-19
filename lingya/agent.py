@@ -30,17 +30,30 @@ class LingYaAgent:
     async def _ensure_conversation(self) -> None:
         if self._conv_id is not None:
             return
-        conversations = await self.db.list_conversations(limit=1)
-        if conversations:
-            self._conv_id = conversations[0]["id"]
-        else:
-            self._conv_id = await self.db.create_conversation("New Conversation")
+        title = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        self._conv_id = await self.db.create_conversation(title)
+
+    async def list_sessions(self) -> list[dict]:
+        return await self.db.list_conversations()
+
+    async def new_session(self, title: str | None = None) -> str:
+        if title is None:
+            title = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        self._conv_id = await self.db.create_conversation(title)
+        return f"Created session #{self._conv_id}: {title}"
+
+    async def switch_session(self, session_id: int) -> str:
+        conv = await self.db.get_conversation(session_id)
+        if conv is None:
+            return f"Session #{session_id} does not exist."
+        self._conv_id = session_id
+        return f"Switched to session #{session_id}: {conv['title']}"
 
     async def handle_input(self, user_input: str) -> str:
         # 1. Add user message to short-term memory
         user_msg = Message(role="user", content=user_input)
         await self.memory.add_message(user_msg)
-        await self.db.log_turn(self._conv_id, "user", user_input)
+        await self.db.log_turn(self._conv_id, "user", user_input)  # type: ignore[arg-type]
 
         # 2. Retrieve relevant long-term memories
         retrieved = await self.memory.retrieve_context(user_input)
@@ -80,7 +93,7 @@ class LingYaAgent:
         # 5. Store assistant response
         assistant_msg = Message(role="assistant", content=response.text)
         await self.memory.add_message(assistant_msg)
-        await self.db.log_turn(self._conv_id, "assistant", response.text)
+        await self.db.log_turn(self._conv_id, "assistant", response.text)  # type: ignore[arg-type]
 
         # 6. Maybe compress short-term memory
         await self.memory.compress_if_needed()

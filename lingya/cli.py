@@ -69,6 +69,15 @@ class LingYaCLI:
             case "/clear":
                 await self._cmd_clear()
 
+            case "/sessions":
+                await self._cmd_sessions()
+
+            case "/new":
+                await self._cmd_new_session()
+
+            case "/switch":
+                await self._cmd_switch(arg)
+
             case _:
                 self.console.print(f"[yellow]Unknown command: {command}[/]. Type /help for available commands.")
 
@@ -122,6 +131,36 @@ class LingYaCLI:
         self.agent.memory.short_term.clear()
         self.console.print("[dim]Short-term memory cleared.[/]")
 
+    async def _cmd_sessions(self) -> None:
+        sessions = await self.agent.list_sessions()
+        if not sessions:
+            self.console.print("[dim]No sessions found.[/]")
+            return
+        current = self.agent._conv_id
+        self.console.print()
+        for s in sessions:
+            marker = "[bold cyan]→[/]" if s["id"] == current else "  "
+            self.console.print(
+                f"{marker} [bold]#{s['id']}[/] {s['title']} "
+                f"[dim]({s.get('turn_count', 0)} turns, {s['updated_at']})[/]"
+            )
+
+    async def _cmd_new_session(self) -> None:
+        result = await self.agent.new_session()
+        self.console.print(f"[green]{result}[/]")
+
+    async def _cmd_switch(self, arg: str) -> None:
+        if not arg:
+            self.console.print("[yellow]Usage: /switch <session_id>[/]")
+            return
+        try:
+            session_id = int(arg)
+        except ValueError:
+            self.console.print("[yellow]Session ID must be a number.[/]")
+            return
+        result = await self.agent.switch_session(session_id)
+        self.console.print(f"[green]{result}[/]")
+
     def _print_welcome(self) -> None:
         p = self.agent.personality.personality
         self.console.print()
@@ -144,6 +183,9 @@ class LingYaCLI:
 | `/reflect` | Analyze the current conversation |
 | `/history` | Show conversation history |
 | `/clear` | Clear short-term memory |
+| `/sessions` | List all sessions |
+| `/new` | Start a new session |
+| `/switch <id>` | Switch to a session by ID |
 | `/help` | Show this help |
 | `/exit`, `/quit` | Exit LingYa |
 

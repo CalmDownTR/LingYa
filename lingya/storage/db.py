@@ -95,10 +95,22 @@ class Database:
 
     async def list_conversations(self, limit: int = 20) -> list[dict]:
         cur = await self.conn.execute(
-            "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
+            """SELECT c.id, c.title, c.created_at, c.updated_at,
+                      (SELECT COUNT(*) FROM turns WHERE conversation_id = c.id) AS turn_count
+               FROM conversations c
+               ORDER BY c.updated_at DESC
+               LIMIT ?""",
             (limit,),
         )
         return [dict(row) for row in await cur.fetchall()]
+
+    async def get_conversation(self, conv_id: int) -> dict | None:
+        cur = await self.conn.execute(
+            "SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?",
+            (conv_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
     # -- Settings --
 
