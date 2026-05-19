@@ -19,8 +19,8 @@ lingya/
 │   ├── long_term.py       # ChromaDB PersistenClient, BGE embeddings, cosine search
 │   └── manager.py         # MemoryManager — bridges short/long term, compression, context builder
 ├── personality/
-│   ├── model.py           # Personality Pydantic model (5 traits + style)
-│   ├── engine.py          # PersonalityEngine — load/save, maybe_evolve() is a stub
+│   ├── model.py           # PersonalityGenome (persistent) + ActivePersonality (runtime mask) + Adapter
+│   ├── engine.py          # PersonalityEngine — load/save genome, get_system_prompt() via mask
 │   └── templates.py       # LLM prompt templates (PERSONALITY_CONTEXT_TEMPLATE unused)
 ├── ingestion/
 │   ├── chunker.py         # Recursive token-based text splitter (tiktoken cl100k_base)
@@ -56,13 +56,26 @@ storage/db.py → storage/migrations
 
 No circular dependencies.
 
+## Personality Architecture
+
+```
+PersonalityGenome (DB, persistent)          # source of truth
+  └─ PersonalityAdapter.activate()          # pure function, no side effects
+       └─ ActivePersonality (memory-only)   # transient, destroyed after request
+            └─ to_system_prompt()           # renders natural language prompt
+```
+
+- **Genome**: stores baseline traits, behavior switches, style prefs. Loaded from DB on startup, saved on change.
+- **Active mask**: flattened view of the genome, created fresh per request. No state, no side effects, concurrency-safe.
+- **Adapter**: stateless bridge — copies genome values into an ActivePersonality. Future evolution: can apply situational modifiers here (e.g., scene-based trait adjustments).
+
 ## Agent Request Lifecycle
 
 ```
 1. CLI passes user input → agent.handle_input()
 2. Message stored in ShortTermMemory (deque)
 3. LongTermMemory searched via ChromaDB vector similarity
-4. System prompt built: personality + retrieved memories + compressed summary
+4. System prompt built: genome → adapter → active mask + retrieved memories + compressed summary
 5. LLM called via OpenAICompatBackend
 6. Response stored in short-term memory
 7. Compression triggered if msg count > threshold

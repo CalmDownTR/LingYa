@@ -29,7 +29,7 @@ main.py → CLI → Agent.handle_input() → LLM response
                     ├── MemoryManager
                     │     ├── ShortTermMemory (deque, sliding window)
                     │     └── LongTermMemory (ChromaDB + BGE embeddings)
-                    ├── PersonalityEngine (Pydantic model → system prompt)
+                    ├── PersonalityEngine (Genome → Adapter → Active mask → system prompt)
                     └── Database (SQLite via aiosqlite)
 ```
 
@@ -48,7 +48,7 @@ main.py → CLI → Agent.handle_input() → LLM response
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
 | `lingya/llm/` | LLM backend | `OpenAICompatBackend` via AsyncOpenAI, single provider interface |
 | `lingya/memory/` | Memory | Short-term (deque), Long-term (ChromaDB), Manager (bridge + compression) |
-| `lingya/personality/` | Personality | 5-trait Pydantic model; evolution is a stub |
+| `lingya/personality/` | Personality | Genome (persistent) + Active mask (runtime); evolution is a stub |
 | `lingya/ingestion/` | Content ingestion | Chunker, embedder (BGE), loader + tool defs (partially wired) |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, 5 tables |
 

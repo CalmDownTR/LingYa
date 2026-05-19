@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lingya.config import PersonalityConfig
 
-from .model import Personality
+from .model import ActivePersonality, PersonalityAdapter, PersonalityGenome
 from .templates import REFLECTION_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
@@ -24,32 +24,31 @@ class PersonalityEngine:
         self.config = config
         self.llm = llm
         self.db = db
-        self._personality = Personality()
+        self._genome = PersonalityGenome()
         self._turn_since_reflection = 0
 
     @property
-    def personality(self) -> Personality:
-        return self._personality
+    def personality(self) -> ActivePersonality:
+        return PersonalityAdapter.activate(self._genome)
 
     def get_system_prompt(self) -> str:
-        return self._personality.to_system_prompt()
+        return self.personality.to_system_prompt()
 
     async def load(self) -> None:
         data = await self.db.get_personality()
         if data:
-            self._personality = Personality.model_validate(data)
+            self._genome = PersonalityGenome.model_validate(data)
         elif self.config.seed_personality:
-            # Load from seed file
             try:
                 with open(self.config.seed_personality) as f:
                     seed_data = json.load(f)
-                self._personality = Personality.model_validate(seed_data)
+                self._genome = PersonalityGenome.model_validate(seed_data)
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
 
     async def save(self) -> None:
-        self._personality.last_updated = datetime.now(timezone.utc).isoformat()
-        await self.db.save_personality(self._personality.model_dump())
+        self._genome.last_updated = datetime.now(timezone.utc).isoformat()
+        await self.db.save_personality(self._genome.model_dump())
 
     async def maybe_evolve(
         self, recent_summary: str, user_feedback: str | None = None
