@@ -10,7 +10,8 @@ wheels/
 .venv
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/specs/
 
 # Data
 data/
