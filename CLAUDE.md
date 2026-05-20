@@ -25,7 +25,7 @@ uv run mypy lingya/        # Type check
 完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
 
 ```
-main.py → CLI → Agent.handle_input() → LangGraph create_react_agent
+main.py → CLI → Agent.handle_input() → LangChain create_agent
                     │   ├── ChatOpenAI (langchain-openai)
                     │   ├── MemoryManager
                     │   │     ├── ShortTermMemory (deque, token-based compression)
@@ -40,7 +40,7 @@ main.py → CLI → Agent.handle_input() → LangGraph create_react_agent
 1. Store user message in short-term memory + SQLite
 2. Pre-flight token budget check — compress if needed (token-based, summary in deque, NOT in ChromaDB)
 3. Build system prompt: personality (behavioral auth language) + compression summaries + tool guidance
-4. LangGraph ReAct agent loop: LLM with tools (search_memory, save_memory, fetch_url), up to N iterations
+4. LangChain agent loop: LLM with tools (search_memory, save_memory, fetch_url), up to N iterations
 5. Extract final AI response, store in deque + SQLite
 6. Personality maybe_evolve() (stub)
 
@@ -48,7 +48,7 @@ main.py → CLI → Agent.handle_input() → LangGraph create_react_agent
 
 | Module | Role | Key detail |
 |--------|------|------------|
-| `lingya/agent.py` | Orchestrator | LangGraph create_react_agent, stateless snapshot mode |
+| `lingya/agent.py` | Orchestrator | LangChain create_agent, stateless snapshot mode |
 | `lingya/cli.py` | Terminal UI | Rich-based, `/fetch` `/personality` `/reflect` etc. |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
 | `lingya/tools.py` | Agent tools | Closure factory: search_memory, save_memory, fetch_url |

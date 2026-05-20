@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from pydantic import SecretStr
 
 from lingya.config import Config
@@ -38,7 +38,7 @@ class LingYaAgent:
 
         self._tools = create_agent_tools(self.memory, ingest_url)
         # No checkpointer — each ainvoke is a fresh snapshot; deque is the sole source of truth
-        self._graph = create_react_agent(model=self._model, tools=self._tools)
+        self._graph = create_agent(self._model, tools=self._tools)
 
         self._conv_id: int | None = None
 
