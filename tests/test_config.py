@@ -17,9 +17,12 @@ class TestConfigDefaults:
 
     def test_default_memory_settings(self):
         cfg = Config()
-        assert cfg.memory.short_term_max_messages == 20
+        assert cfg.memory.short_term_max_messages == 100  # hard cap safety guard
         assert cfg.memory.long_term_top_k == 5
         assert cfg.memory.compression_enabled is True
+        assert cfg.memory.max_context_tokens == 80000
+        assert cfg.memory.compression_trigger_ratio == 0.75
+        assert cfg.memory.max_agent_iterations == 5
 
     def test_default_personality_settings(self):
         cfg = Config()

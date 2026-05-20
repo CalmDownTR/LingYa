@@ -8,7 +8,7 @@ from lingya.memory.short_term import Message, ShortTermMemory
 class TestShortTermMemory:
     @pytest.fixture
     def memory(self) -> ShortTermMemory:
-        return ShortTermMemory(max_messages=6, compression_trigger=4)
+        return ShortTermMemory(max_messages=6)
 
     def test_add_appends_message(self, memory):
         msg = Message(role="user", content="hello")
@@ -40,16 +40,24 @@ class TestShortTermMemory:
         assert "assistant: hi there" in text
         assert text == "user: hello\nassistant: hi there"
 
-    def test_should_compress_false_below_trigger(self, memory):
-        memory.add(Message(role="user", content="a"))
-        memory.add(Message(role="user", content="b"))
-        memory.add(Message(role="user", content="c"))
-        assert memory.should_compress() is False
-
-    def test_should_compress_true_above_trigger(self, memory):
-        for i in range(5):
+    def test_hard_cap_enforcement_pops_oldest(self, memory):
+        for i in range(10):
             memory.add(Message(role="user", content=f"msg{i}"))
-        assert memory.should_compress() is True
+        assert len(memory) == 6  # capped at max_messages
+        messages = memory.get_messages()
+        assert messages[0].content == "msg4"
+        assert messages[-1].content == "msg9"
+
+    def test_prepend_inserts_at_front(self, memory):
+        memory.add(Message(role="user", content="first"))
+        memory.add(Message(role="assistant", content="second"))
+        memory.prepend(Message(role="system", content="summary"))
+        messages = memory.get_messages()
+        assert len(messages) == 3
+        assert messages[0].role == "system"
+        assert messages[0].content == "summary"
+        assert messages[1].content == "first"
+        assert messages[2].content == "second"
 
     def test_pop_compressible_removes_from_front(self, memory):
         for i in range(5):

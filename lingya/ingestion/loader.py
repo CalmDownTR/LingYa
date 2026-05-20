@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 import httpx
 from bs4 import BeautifulSoup
 
-from .chunker import chunk_text
 
 if TYPE_CHECKING:
     from lingya.memory.manager import MemoryManager
@@ -46,7 +45,7 @@ async def ingest_url(
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
     text = soup.get_text(separator="\n", strip=True)
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     text = "\n".join(lines)
 
     return await memory_manager.ingest_content(text, url, "web_page")

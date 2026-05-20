@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from lingya.config import PersonalityConfig
 
 from .model import ActivePersonality, PersonalityAdapter, PersonalityGenome, Situation, detect_situation
-from .templates import REFLECTION_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
-    from lingya.llm.base import BaseLLMBackend
     from lingya.storage.db import Database
 
 
@@ -18,8 +16,8 @@ class PersonalityEngine:
     def __init__(
         self,
         config: PersonalityConfig,
-        llm: BaseLLMBackend,
         db: Database,
+        llm: Any = None,  # Any chat model; unused currently (maybe_evolve is stub)
     ) -> None:
         self.config = config
         self.llm = llm

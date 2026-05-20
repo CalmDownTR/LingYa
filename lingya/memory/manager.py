@@ -1,36 +1,34 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from lingya.config import MemoryConfig
-from lingya.ingestion.chunker import chunk_text
-from lingya.memory.short_term import Message
+from lingya.ingestion.chunker import chunk_text, count_tokens
 
 from .long_term import LongTermMemory, MemoryEntry
-from .short_term import ShortTermMemory
+from .short_term import Message, ShortTermMemory
 
 if TYPE_CHECKING:
-    from lingya.llm.base import BaseLLMBackend
+    pass
 
 
 class MemoryManager:
     def __init__(
         self,
         config: MemoryConfig,
-        llm: BaseLLMBackend,
+        summarize: Callable[..., Awaitable[str]] | None = None,
     ) -> None:
         self.config = config
-        self.llm = llm
+        self._summarize = summarize
         self.short_term = ShortTermMemory(
             max_messages=config.short_term_max_messages,
-            compression_trigger=config.compression_trigger_messages,
         )
         self.long_term = LongTermMemory(
             persist_dir=config.chroma_persist_dir,
             embedding_model_name=config.embedding_model,
         )
-        self._compressed_summary: str = ""
         self._turn_count: int = 0
 
     async def add_message(self, message: Message) -> None:
@@ -40,59 +38,68 @@ class MemoryManager:
     async def retrieve_context(self, query: str) -> list[MemoryEntry]:
         return await self.long_term.search(query, top_k=self.config.long_term_top_k)
 
-    async def compress_if_needed(self) -> None:
-        if not self.config.compression_enabled:
-            return
-        if not self.short_term.should_compress():
-            return
+    async def compress_context(self, max_tokens: int) -> str:
+        """Compress old messages to fit within max_tokens budget.
 
-        # Keep the most recent ~half of max messages
-        keep_count = self.config.short_term_max_messages // 2
-        excess = len(self.short_term) - keep_count
-        if excess <= 0:
-            return
+        Pops oldest messages, summarizes them via LLM, and prepends the summary
+        as a system message. Does NOT store to ChromaDB — this is a same-session
+        context window management concern only.
+        """
+        if not self._summarize:
+            return ""
 
-        old_messages = self.short_term.pop_compressible(excess)
-        conversation_text = "\n".join(
-            f"{m.role}: {m.content}" for m in old_messages
-        )
+        # Pop messages until estimated tokens within budget, keeping at least 2
+        while self.estimate_message_tokens() > max_tokens and len(self.short_term) > 2:
+            excess = max(1, len(self.short_term) // 4)
+            old_messages = self.short_term.pop_compressible(excess)
+            conversation_text = "\n".join(
+                f"{m.role}: {m.content}" for m in old_messages
+            )
 
-        summary = await self.llm.generate_simple(
-            system_prompt="You are a conversation summarizer. Summarize the key points, topics, and any important details from this conversation. Be concise but thorough. Write in the same language as the conversation.",
-            user_message=f"Summarize this conversation excerpt:\n\n{conversation_text}",
-            max_tokens=512,
-        )
+            summary = await self._summarize(
+                system_prompt=(
+                    "You are a conversation summarizer. Summarize the key points, "
+                    "topics, and any important details from this conversation. "
+                    "Be concise but thorough. Write in the same language as the conversation."
+                ),
+                user_message=f"Summarize this conversation excerpt:\n\n{conversation_text}",
+                max_tokens=512,
+            )
 
-        self._compressed_summary = summary
+            self.short_term.prepend(Message(
+                role="system",
+                content=f"[Compressed context]: {summary}",
+            ))
 
-        # Store the compressed summary in long-term memory
-        entry = MemoryEntry(
-            id=f"compressed_{self._turn_count}",
-            text=summary,
-            metadata={
-                "type": "compressed_conversation",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "original_turns": len(old_messages),
-            },
-        )
-        await self.long_term.store([entry])
+        return ""
 
-    def build_context_for_llm(self) -> tuple[str, list[dict]]:
-        """Returns (context_string_for_system_prompt, messages_for_api)."""
-        context_parts: list[str] = []
+    async def save_to_long_term(self, content: str, source: str) -> list[str]:
+        """Chunk and store content into long-term memory for future retrieval."""
+        chunks = chunk_text(content)
+        if not chunks:
+            return []
 
-        if self._compressed_summary:
-            context_parts.append(f"## Recent Context Summary\n{self._compressed_summary}")
+        now = datetime.now(timezone.utc).isoformat()
+        entries: list[MemoryEntry] = []
+        for i, chunk in enumerate(chunks):
+            chunk_id = f"agent_saved_{i}_{_uuid_safe()}"
+            entries.append(MemoryEntry(
+                id=chunk_id,
+                text=chunk,
+                metadata={
+                    "type": "agent_saved",
+                    "source": source,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "timestamp": now,
+                },
+            ))
 
-        context = "\n\n".join(context_parts) if context_parts else ""
-        messages = [
-            {"role": m.role, "content": m.content}
-            for m in self.short_term.get_messages()
-        ]
-
-        return context, messages
+        await self.long_term.store(entries)
+        return [e.id for e in entries]
 
     async def ingest_content(self, text: str, source: str, content_type: str) -> list[str]:
+        """Ingest external content (e.g. from /fetch). Kept for CLI compatibility."""
         chunks = chunk_text(text)
         if not chunks:
             return []
@@ -100,7 +107,7 @@ class MemoryManager:
         now = datetime.now(timezone.utc).isoformat()
         entries: list[MemoryEntry] = []
         for i, chunk in enumerate(chunks):
-            chunk_id = f"ingest_{content_type}_{i}_{uuid_safe()}"
+            chunk_id = f"ingest_{content_type}_{i}_{_uuid_safe()}"
             entries.append(MemoryEntry(
                 id=chunk_id,
                 text=chunk,
@@ -116,7 +123,14 @@ class MemoryManager:
         await self.long_term.store(entries)
         return [e.id for e in entries]
 
+    def estimate_message_tokens(self) -> int:
+        """Estimate total tokens across all deque messages using tiktoken."""
+        total = 0
+        for m in self.short_term.get_messages():
+            total += count_tokens(m.content)
+        return total
 
-def uuid_safe() -> str:
+
+def _uuid_safe() -> str:
     import uuid
     return str(uuid.uuid4())[:8]

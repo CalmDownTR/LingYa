@@ -104,7 +104,7 @@ class LingYaCLI:
                     tag.decompose()
                 text = soup.get_text(separator="\n", strip=True)
                 # Remove excessive blank lines
-                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
                 text = "\n".join(lines)
 
             result = await self.agent.ingest_and_learn(text, url, "web_page")

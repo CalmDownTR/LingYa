@@ -1,18 +1,21 @@
 llm:
   provider: deepseek           # deepseek | openai | ollama
-  model: deepseek-v4-flash
+  model: deepseek-chat
   api_key_env: DEEPSEEK_API_KEY
   api_base_url: https://api.deepseek.com
   temperature: 0.7
   max_tokens: 32768
+  model_context_window: 128000
 
 memory:
-  short_term_max_messages: 20
+  short_term_max_messages: 100  # Hard cap safety guard only
   long_term_top_k: 5
   chroma_persist_dir: ./data/chroma
   embedding_model: ./data/models/bge-small-zh-v1.5
   compression_enabled: true
-  compression_trigger_messages: 15
+  max_context_tokens: 80000
+  compression_trigger_ratio: 0.75
+  max_agent_iterations: 5
 
 personality:
   reflection_interval_turns: 10

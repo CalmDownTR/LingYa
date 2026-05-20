@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from functools import lru_cache
 
 from sentence_transformers import SentenceTransformer

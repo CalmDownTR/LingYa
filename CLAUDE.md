@@ -25,32 +25,36 @@ uv run mypy lingya/        # Type check
 完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
 
 ```
-main.py → CLI → Agent.handle_input() → LLM response
-                    ├── MemoryManager
-                    │     ├── ShortTermMemory (deque, sliding window)
-                    │     └── LongTermMemory (ChromaDB + BGE embeddings)
-                    ├── PersonalityEngine (Genome → Adapter → Active mask → system prompt)
-                    └── Database (SQLite via aiosqlite)
+main.py → CLI → Agent.handle_input() → LangGraph create_react_agent
+                    │   ├── ChatOpenAI (langchain-openai)
+                    │   ├── MemoryManager
+                    │   │     ├── ShortTermMemory (deque, token-based compression)
+                    │   │     └── LongTermMemory (ChromaDB + BGE embeddings)
+                    │   ├── PersonalityEngine (Genome → Adapter → Active mask → system prompt)
+                    │   ├── Agent Tools (create_agent_tools closure factory)
+                    │   │     ├── search_memory, save_memory, fetch_url
+                    │   └── Database (SQLite via aiosqlite)
 ```
 
 ### Request lifecycle
-1. Store user message in short-term memory
-2. Search long-term memory (ChromaDB + cosine similarity)
-3. Detect situation from user input (keyword-based), apply trait perturbations
-4. Build system prompt: perturbed personality (behavioral auth language) + retrieved memories + compressed summary
-5. Call LLM, store response, compress short-term if needed, log turn
+1. Store user message in short-term memory + SQLite
+2. Pre-flight token budget check — compress if needed (token-based, summary in deque, NOT in ChromaDB)
+3. Build system prompt: personality (behavioral auth language) + compression summaries + tool guidance
+4. LangGraph ReAct agent loop: LLM with tools (search_memory, save_memory, fetch_url), up to N iterations
+5. Extract final AI response, store in deque + SQLite
+6. Personality maybe_evolve() (stub)
 
 ### Modules at a glance
 
 | Module | Role | Key detail |
 |--------|------|------------|
-| `lingya/agent.py` | Orchestrator | Owns the request lifecycle |
+| `lingya/agent.py` | Orchestrator | LangGraph create_react_agent, stateless snapshot mode |
 | `lingya/cli.py` | Terminal UI | Rich-based, `/fetch` `/personality` `/reflect` etc. |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
-| `lingya/llm/` | LLM backend | `OpenAICompatBackend` via AsyncOpenAI, single provider interface |
-| `lingya/memory/` | Memory | Short-term (deque), Long-term (ChromaDB), Manager (bridge + compression) |
+| `lingya/tools.py` | Agent tools | Closure factory: search_memory, save_memory, fetch_url |
+| `lingya/memory/` | Memory | Short-term (deque, hard-cap safety guard), Long-term (ChromaDB), Manager (token-based compression, save_to_long_term) |
 | `lingya/personality/` | Personality | Genome (persistent, 6 traits + 4 switches) + Active mask (runtime, behavioral auth language) + situation detection + perturbation; evolution is a stub |
-| `lingya/ingestion/` | Content ingestion | Chunker, embedder (BGE), loader + tool defs (partially wired) |
+| `lingya/ingestion/` | Content ingestion | Chunker, embedder (BGE), loader |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, 5 tables |
 
 ### Configuration

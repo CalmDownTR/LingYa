@@ -14,15 +14,18 @@ class LLMConfig(BaseModel):
     api_base_url: str = "https://api.deepseek.com"
     temperature: float = 0.7
     max_tokens: int = 32768
+    model_context_window: int = 128000
 
 
 class MemoryConfig(BaseModel):
-    short_term_max_messages: int = 20
+    short_term_max_messages: int = 100  # Hard cap safety guard — NOT the primary context management trigger
     long_term_top_k: int = 5
     chroma_persist_dir: str = "./data/chroma"
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     compression_enabled: bool = True
-    compression_trigger_messages: int = 15
+    max_context_tokens: int = 80000
+    compression_trigger_ratio: float = 0.75
+    max_agent_iterations: int = 5
 
 
 class PersonalityConfig(BaseModel):
