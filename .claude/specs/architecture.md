@@ -10,10 +10,7 @@ lingya/
 ├── agent.py               # LingYaAgent — core orchestrator
 ├── cli.py                 # LingYaCLI — Rich interactive terminal loop
 ├── config.py              # Pydantic models: Config, LLMConfig, MemoryConfig, PersonalityConfig
-├── llm/
-│   ├── base.py            # BaseLLMBackend (ABC), ToolDefinition, LLMResponse
-│   ├── factory.py         # create_backend() — routes provider name to OpenAICompatBackend
-│   └── openai_compat.py   # AsyncOpenAI wrapper, lazy init, tool call support
+├── embedder.py            # SentenceTransformer wrapper, LRU-cached, async
 ├── memory/
 │   ├── short_term.py      # deque[Message], sliding window, compression trigger
 │   ├── long_term.py       # ChromaDB PersistenClient, BGE embeddings, cosine search
@@ -24,9 +21,7 @@ lingya/
 │   └── templates.py       # LLM prompt templates (PERSONALITY_CONTEXT_TEMPLATE unused)
 ├── ingestion/
 │   ├── chunker.py         # Recursive token-based text splitter (tiktoken cl100k_base)
-│   ├── embedder.py        # SentenceTransformer wrapper, LRU-cached, async
-│   ├── loader.py          # ingest_text/ingest_file/ingest_url (NOT called by agent or CLI)
-│   └── tools.py           # LLM tool definitions for fetch/ingest (NOT wired to agent)
+│   └── loader.py          # ingest_text/ingest_file/ingest_url (NOT called by agent or CLI)
 └── storage/
     ├── db.py              # SQLite via aiosqlite, 5 tables, CRUD methods
     └── migrations.py      # 6 ordered SQL migration statements
@@ -37,19 +32,16 @@ lingya/
 ```
 main.py → config, agent, cli
 
-agent.py → config, llm/factory, memory/manager, memory/short_term, personality/engine, storage/db
+agent.py → config, memory/manager, memory/short_term, personality/engine, storage/db, ingestion/loader
 cli.py → agent
 
-llm/factory.py → config, llm/base, llm/openai_compat
-llm/openai_compat.py → config, llm/base
 
 memory/manager.py → config, ingestion/chunker, memory/short_term, memory/long_term
-memory/long_term.py → ingestion/embedder
+memory/long_term.py → embedder
 
 personality/engine.py → config, personality/model, personality/templates
 
 ingestion/loader.py → ingestion/chunker, memory/manager (TYPE_CHECKING only)
-ingestion/tools.py → llm/base, memory/manager (TYPE_CHECKING only)
 
 storage/db.py → storage/migrations
 ```
@@ -125,7 +117,7 @@ PersonalityGenome (DB, persistent)          # source of truth
 3. LongTermMemory searched via ChromaDB vector similarity
 4. Situation detected from user input → adapter applies trait perturbations
 5. System prompt built: genome → adapter(situation) → active mask + retrieved memories + compressed summary
-6. LLM called via OpenAICompatBackend
+6. LLM called via langchain-openai ChatOpenAI (DeepSeek API)
 7. Response stored in short-term memory
 8. Compression triggered if msg count > threshold
 9. Personality maybe_evolve() called (always no-op currently)
@@ -139,6 +131,5 @@ PersonalityGenome (DB, persistent)          # source of truth
 | Personality evolution | `maybe_evolve()` is a stub — always returns False |
 | Situational detection | Keyword-based; LLM-based classifier would be more accurate |
 | ingestion/loader.py | Ingest functions defined but not called by agent or CLI |
-| ingestion/tools.py | LLM tool defs defined but not wired to agent |
 | PERSONALITY_CONTEXT_TEMPLATE | Defined in templates.py but agent builds context inline instead |
 | CLI /fetch | CLI has its own inline URL fetch logic, bypasses loader.ingest_url |

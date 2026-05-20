@@ -7,7 +7,7 @@ from pathlib import Path
 
 import chromadb
 
-from lingya.ingestion.embedder import get_embedder
+from lingya.embedder import get_embedder
 
 
 @dataclass
