@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain.agents.middleware import AgentState
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.sqlite import SqliteSaver
 from pydantic import SecretStr
 
 load_dotenv()
@@ -43,6 +44,11 @@ async def main() -> None:
     await db.initialize()
     personality_engine = PersonalityEngine(config.personality, db, llm=model)
     await personality_engine.load()
+
+    # ── Checkpointer (persists conversation state across restarts) ──
+    checkpoint_conn = sqlite3.connect(config.db_path, check_same_thread=False)
+    checkpointer = SqliteSaver(checkpoint_conn)
+    checkpointer.setup()
 
     personality = PersonalityMiddleware(personality_engine)
 
@@ -79,6 +85,7 @@ async def main() -> None:
         middleware=[personality],
         system_prompt=base_prompt,
         backend=StateBackend(),
+        checkpointer=checkpointer,
     )
 
     # ── CLI ──
@@ -88,6 +95,7 @@ async def main() -> None:
     except (KeyboardInterrupt, EOFError):
         print("\nGoodbye.")
     finally:
+        checkpoint_conn.close()
         await db.close()
 
 
