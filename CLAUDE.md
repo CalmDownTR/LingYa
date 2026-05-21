@@ -24,38 +24,40 @@ uv run mypy lingya/        # Type check
 
 完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
 
+LingYa 基于 **deepagents** (`create_deep_agent`) 构建，核心差异点是 **PersonalityMiddleware**。
+
 ```
-main.py → CLI → Agent.handle_input() → LangChain create_agent
-                    │   ├── ChatOpenAI (langchain-openai)
-                    │   ├── MemoryManager
-                    │   │     ├── ShortTermMemory (deque, token-based compression)
-                    │   │     └── LongTermMemory (ChromaDB + BGE embeddings)
-                    │   ├── PersonalityEngine (Genome → Adapter → Active mask → system prompt)
-                    │   ├── Agent Tools (create_agent_tools closure factory)
-                    │   │     ├── search_memory, save_memory, fetch_url
-                    │   └── Database (SQLite via aiosqlite)
+main.py → create_deep_agent()
+            ├── model: ChatOpenAI (DeepSeek API)
+            ├── tools: memory tools (ChromaDB) + MCP tools (optional)
+            ├── middleware: [PersonalityMiddleware]   ← LingYa 核心差异点
+            ├── system_prompt: base agent prompt
+            └── backend: StateBackend
 ```
 
 ### Request lifecycle
-1. Store user message in short-term memory + SQLite
-2. Pre-flight token budget check — compress if needed (token-based, summary in deque, NOT in ChromaDB)
-3. Build system prompt: personality (behavioral auth language) + compression summaries + tool guidance
-4. LangChain agent loop: LLM with tools (search_memory, save_memory, fetch_url), up to N iterations
-5. Extract final AI response, store in deque + SQLite
-6. Personality maybe_evolve() (stub)
+1. CLI calls `agent.ainvoke({"messages": [user_msg]}, config)` with thread_id
+2. LangGraph checkpoint loads conversation state
+3. deepagents middleware pipeline:
+   - TodoList, Filesystem, SubAgent, Summarization middleware
+   - **PersonalityMiddleware**: detect situation → adapter activates genome → inject behavioral auth language into system prompt
+4. LLM called with all tools available (memory, filesystem, MCP)
+5. Tool calls executed, response extracted, state checkpointed
 
 ### Modules at a glance
 
 | Module | Role | Key detail |
 |--------|------|------------|
-| `lingya/agent.py` | Orchestrator | LangChain create_agent, stateless snapshot mode |
-| `lingya/cli.py` | Terminal UI | Rich-based, `/fetch` `/personality` `/reflect` etc. |
-| `lingya/config.py` | Config | Pydantic + YAML + env overlay |
-| `lingya/tools.py` | Agent tools | Closure factory: search_memory, save_memory, fetch_url |
-| `lingya/memory/` | Memory | Short-term (deque, hard-cap safety guard), Long-term (ChromaDB), Manager (token-based compression, save_to_long_term) |
+| `main.py` | Assembly | Wires model + tools + middleware + CLI |
+| `lingya/cli.py` | Terminal UI | Rich-based, `/personality` `/sessions` `/new` `/switch` |
+| `lingya/config.py` | Config | Pydantic + YAML + env overlay, slimmed down |
+| `lingya/middleware.py` | Personality injection | `AgentMiddleware.awrap_model_call()` — LingYa's differentiator |
+| `lingya/memory/long_term.py` | Long-term memory | ChromaDB + BGE embeddings, cosine search |
+| `lingya/memory/tools.py` | Memory tools | search_memory, save_memory as langchain @tool |
 | `lingya/personality/` | Personality | Genome (persistent, 6 traits + 4 switches) + Active mask (runtime, behavioral auth language) + situation detection + perturbation; evolution is a stub |
-| `lingya/ingestion/` | Content ingestion | Chunker, embedder (BGE), loader |
+| `lingya/ingestion/chunker.py` | Text chunking | Recursive token-based splitter (tiktoken) |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, 5 tables |
+| `lingya/embedder.py` | Embeddings | SentenceTransformer wrapper, LRU-cached, async |
 
 ### Configuration
 - `config.yaml` — runtime settings (safe to commit)

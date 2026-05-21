@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from lingya.agent import LingYaAgent
+from lingya.personality.engine import PersonalityEngine
+from lingya.storage.db import Database
 
 
 class LingYaCLI:
-    def __init__(self, agent: LingYaAgent) -> None:
+    def __init__(self, agent, personality_engine: PersonalityEngine, db: Database) -> None:
         self.agent = agent
+        self.personality_engine = personality_engine
+        self.db = db
         self.console = Console()
+        self._conv_id: int | None = None
+        self._thread_id: str = "default"
 
     async def run(self) -> None:
         self._print_welcome()
+        await self._ensure_conversation()
+
         while True:
             try:
                 user_input = Prompt.ask("\n[bold cyan]You[/]")
@@ -26,13 +35,11 @@ class LingYaCLI:
             if not user_input:
                 continue
 
-            # Check for commands
             if user_input.startswith("/"):
                 await self._handle_command(user_input)
             else:
-                # Show thinking indicator
                 with self.console.status("[dim]Thinking...[/]"):
-                    response = await self.agent.handle_input(user_input)
+                    response = await self._invoke_agent(user_input)
                 self.console.print()
                 self.console.print(Panel.fit(
                     Markdown(response),
@@ -40,6 +47,37 @@ class LingYaCLI:
                     title="LingYa",
                     title_align="left",
                 ))
+
+    async def _invoke_agent(self, user_input: str) -> str:
+        # Log user turn
+        if self._conv_id:
+            await self.db.log_turn(self._conv_id, "user", user_input)
+
+        result = await self.agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_input}]},
+            {"configurable": {"thread_id": self._thread_id}},
+        )
+
+        # Extract final AI response
+        messages = result.get("messages", [])
+        response_text = ""
+        if messages:
+            last = messages[-1]
+            content = last.content if hasattr(last, "content") else str(last)
+            response_text = content if isinstance(content, str) else str(content)
+
+        # Log assistant turn
+        if self._conv_id and response_text:
+            await self.db.log_turn(self._conv_id, "assistant", response_text)
+
+        return response_text
+
+    async def _ensure_conversation(self) -> None:
+        if self._conv_id is not None:
+            return
+        title = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        self._conv_id = await self.db.create_conversation(title)
+        self._thread_id = str(self._conv_id)
 
     async def _handle_command(self, cmd: str) -> None:
         parts = cmd.split(maxsplit=1)
@@ -50,93 +88,30 @@ class LingYaCLI:
             case "/exit" | "/quit":
                 self.console.print("[dim]Goodbye.[/]")
                 raise EOFError()
-
             case "/help":
                 self._show_help()
-
             case "/personality":
-                await self._cmd_personality(arg)
-
-            case "/fetch":
-                await self._cmd_fetch(arg)
-
-            case "/reflect":
-                await self._cmd_reflect()
-
-            case "/history":
-                await self._cmd_history()
-
-            case "/clear":
-                await self._cmd_clear()
-
+                self._cmd_personality()
             case "/sessions":
                 await self._cmd_sessions()
-
             case "/new":
                 await self._cmd_new_session()
-
             case "/switch":
                 await self._cmd_switch(arg)
-
             case _:
                 self.console.print(f"[yellow]Unknown command: {command}[/]. Type /help for available commands.")
 
-    async def _cmd_personality(self, arg: str) -> None:
-        p = self.agent.personality.personality
+    def _cmd_personality(self) -> None:
+        p = self.personality_engine.personality
         prompt = p.to_system_prompt()
         self.console.print(Panel(prompt, title="Current Personality", border_style="blue"))
 
-    async def _cmd_fetch(self, url: str) -> None:
-        if not url:
-            self.console.print("[yellow]Usage: /fetch <url>[/]")
-            return
-
-        self.console.print(f"[dim]Fetching {url}...[/]")
-        try:
-            import httpx
-            from bs4 import BeautifulSoup
-
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                resp = await client.get(url, headers={"User-Agent": "LingYa/0.1"})
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for tag in soup(["script", "style", "nav", "footer", "header"]):
-                    tag.decompose()
-                text = soup.get_text(separator="\n", strip=True)
-                # Remove excessive blank lines
-                lines = [line.strip() for line in text.splitlines() if line.strip()]
-                text = "\n".join(lines)
-
-            result = await self.agent.ingest_and_learn(text, url, "web_page")
-            self.console.print(f"[green]{result}[/]")
-        except Exception as e:
-            self.console.print(f"[red]Failed to fetch: {e}[/]")
-
-    async def _cmd_reflect(self) -> None:
-        with self.console.status("[dim]Reflecting...[/]"):
-            result = await self.agent.reflect()
-        self.console.print()
-        self.console.print(Panel(Markdown(result), title="Reflection", border_style="magenta"))
-
-    async def _cmd_history(self) -> None:
-        messages = self.agent.memory.short_term.get_messages()
-        if not messages:
-            self.console.print("[dim]No conversation history.[/]")
-            return
-        for m in messages:
-            role_color = "cyan" if m.role == "user" else "green"
-            self.console.print(f"[{role_color}]{m.role}[/]: {m.content[:200]}{'...' if len(m.content) > 200 else ''}")
-
-    async def _cmd_clear(self) -> None:
-        self.agent.memory.short_term.clear()
-        self.console.print("[dim]Short-term memory cleared.[/]")
-
     async def _cmd_sessions(self) -> None:
-        sessions = await self.agent.list_sessions()
+        sessions = await self.db.list_conversations()
         if not sessions:
             self.console.print("[dim]No sessions found.[/]")
             return
-        current = self.agent._conv_id
+        current = self._conv_id
         self.console.print()
         for s in sessions:
             marker = "[bold cyan]→[/]" if s["id"] == current else "  "
@@ -146,8 +121,10 @@ class LingYaCLI:
             )
 
     async def _cmd_new_session(self) -> None:
-        result = await self.agent.new_session()
-        self.console.print(f"[green]{result}[/]")
+        title = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        self._conv_id = await self.db.create_conversation(title)
+        self._thread_id = str(self._conv_id)
+        self.console.print(f"[green]Created session #{self._conv_id}: {title}[/]")
 
     async def _cmd_switch(self, arg: str) -> None:
         if not arg:
@@ -158,11 +135,16 @@ class LingYaCLI:
         except ValueError:
             self.console.print("[yellow]Session ID must be a number.[/]")
             return
-        result = await self.agent.switch_session(session_id)
-        self.console.print(f"[green]{result}[/]")
+        conv = await self.db.get_conversation(session_id)
+        if conv is None:
+            self.console.print(f"[yellow]Session #{session_id} does not exist.[/]")
+            return
+        self._conv_id = session_id
+        self._thread_id = str(session_id)
+        self.console.print(f"[green]Switched to session #{session_id}: {conv['title']}[/]")
 
     def _print_welcome(self) -> None:
-        p = self.agent.personality.personality
+        p = self.personality_engine.personality
         self.console.print()
         self.console.print(Panel.fit(
             f"[bold]{p.name}[/] — {p.role}\n"
@@ -178,11 +160,7 @@ class LingYaCLI:
 
 | Command | Description |
 |---------|-------------|
-| `/fetch <url>` | Ingest content from a web page |
 | `/personality` | View current personality |
-| `/reflect` | Analyze the current conversation |
-| `/history` | Show conversation history |
-| `/clear` | Clear short-term memory |
 | `/sessions` | List all sessions |
 | `/new` | Start a new session |
 | `/switch <id>` | Switch to a session by ID |
