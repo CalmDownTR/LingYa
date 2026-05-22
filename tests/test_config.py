@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
-
 import pytest
-import yaml
 
 from lingya.config import Config, load_config
 
@@ -22,44 +17,35 @@ class TestConfigDefaults:
 
 class TestLoadConfig:
     def test_defaults_when_no_file(self, monkeypatch):
-        # Ensure no config file or env vars interfere
-        monkeypatch.delenv("LINGYA_CONFIG", raising=False)
-        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-        monkeypatch.delenv("LINGYA_API_KEY", raising=False)
-        monkeypatch.delenv("LINGYA_LLM_PROVIDER", raising=False)
+        for var in ("LINGYA_CONFIG", "DEEPSEEK_API_KEY", "LINGYA_API_KEY", "LINGYA_LLM_PROVIDER"):
+            monkeypatch.delenv(var, raising=False)
         cfg = load_config("/nonexistent/path/config.yaml")
         assert isinstance(cfg, Config)
         assert cfg.llm.provider == "deepseek"
 
-    def test_loads_from_yaml_file(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.dump({"llm": {"provider": "openai", "model": "gpt-4"}}, f)
-            tmp_path = f.name
-
-        try:
-            cfg = load_config(tmp_path)
-            assert cfg.llm.provider == "openai"
-            assert cfg.llm.model == "gpt-4"
-        finally:
-            Path(tmp_path).unlink()
-
-    def test_env_overlay_provider(self, monkeypatch, tmp_path):
+    def test_loads_from_yaml_file(self, tmp_path):
         config_path = tmp_path / "config.yaml"
-        config_path.write_text("llm:\n  provider: deepseek\n")
-        monkeypatch.setenv("LINGYA_CONFIG", str(config_path))
-        monkeypatch.setenv("LINGYA_LLM_PROVIDER", "openai")
+        config_path.write_text("llm:\n  provider: openai\n  model: gpt-4\n")
 
-        cfg = load_config()
+        cfg = load_config(str(config_path))
         assert cfg.llm.provider == "openai"
+        assert cfg.llm.model == "gpt-4"
 
-    def test_env_overlay_model(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize(
+        "env_var,env_value,attr,expected",
+        [
+            ("LINGYA_LLM_PROVIDER", "openai", "provider", "openai"),
+            ("LINGYA_LLM_MODEL", "gpt-4o", "model", "gpt-4o"),
+        ],
+    )
+    def test_env_overlay_string_fields(self, monkeypatch, tmp_path, env_var, env_value, attr, expected):
         config_path = tmp_path / "config.yaml"
-        config_path.write_text("llm:\n  model: deepseek-chat\n")
+        config_path.write_text(f"llm:\n  {attr}: default-value\n")
         monkeypatch.setenv("LINGYA_CONFIG", str(config_path))
-        monkeypatch.setenv("LINGYA_LLM_MODEL", "gpt-4o")
+        monkeypatch.setenv(env_var, env_value)
 
         cfg = load_config()
-        assert cfg.llm.model == "gpt-4o"
+        assert getattr(cfg.llm, attr) == expected
 
     def test_env_overlay_max_tokens_as_int(self, monkeypatch, tmp_path):
         config_path = tmp_path / "config.yaml"
@@ -80,25 +66,28 @@ class TestLoadConfig:
         cfg = load_config()
         assert cfg.db_path == "/custom/path/db.sqlite"
 
-    def test_lingya_api_key_sets_api_key_env(self, monkeypatch, tmp_path):
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text("llm:\n  provider: deepseek\n")
-        monkeypatch.setenv("LINGYA_CONFIG", str(config_path))
-        monkeypatch.setenv("LINGYA_API_KEY", "sk-test-key")
-        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-
-        cfg = load_config()
-        assert cfg.llm.api_key_env == "LINGYA_API_KEY"
-
-    def test_deepseek_api_key_fallback(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize(
+        "lingya_key,deepseek_key,expected_env",
+        [
+            ("sk-lingya", None, "LINGYA_API_KEY"),
+            (None, "sk-deepseek", "DEEPSEEK_API_KEY"),
+        ],
+    )
+    def test_api_key_env_selection(
+        self, monkeypatch, tmp_path, lingya_key, deepseek_key, expected_env
+    ):
         config_path = tmp_path / "config.yaml"
         config_path.write_text("llm:\n  provider: deepseek\n")
         monkeypatch.setenv("LINGYA_CONFIG", str(config_path))
         monkeypatch.delenv("LINGYA_API_KEY", raising=False)
-        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-key")
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        if lingya_key:
+            monkeypatch.setenv("LINGYA_API_KEY", lingya_key)
+        if deepseek_key:
+            monkeypatch.setenv("DEEPSEEK_API_KEY", deepseek_key)
 
         cfg = load_config()
-        assert cfg.llm.api_key_env == "DEEPSEEK_API_KEY"
+        assert cfg.llm.api_key_env == expected_env
 
     def test_lingya_config_env_var(self, monkeypatch, tmp_path):
         config_path = tmp_path / "custom.yaml"
