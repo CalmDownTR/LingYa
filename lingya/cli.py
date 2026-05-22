@@ -49,10 +49,6 @@ class LingYaCLI:
                 ))
 
     async def _invoke_agent(self, user_input: str) -> str:
-        # Log user turn
-        if self._conv_id:
-            await self.db.log_turn(self._conv_id, "user", user_input)
-
         result = await self.agent.ainvoke(
             {"messages": [{"role": "user", "content": user_input}]},
             {"configurable": {"thread_id": self._thread_id}},
@@ -66,9 +62,9 @@ class LingYaCLI:
             content = last.content if hasattr(last, "content") else str(last)
             response_text = content if isinstance(content, str) else str(content)
 
-        # Log assistant turn
-        if self._conv_id and response_text:
-            await self.db.log_turn(self._conv_id, "assistant", response_text)
+        # Bump conversation timestamp
+        if self._conv_id:
+            await self.db.update_conversation_timestamp(self._conv_id)
 
         return response_text
 
@@ -117,7 +113,7 @@ class LingYaCLI:
             marker = "[bold cyan]→[/]" if s["id"] == current else "  "
             self.console.print(
                 f"{marker} [bold]#{s['id']}[/] {s['title']} "
-                f"[dim]({s.get('turn_count', 0)} turns, {s['updated_at']})[/]"
+                f"[dim]({s['updated_at']})[/]"
             )
 
     async def _cmd_new_session(self) -> None:

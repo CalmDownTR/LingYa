@@ -45,43 +45,37 @@ class TestDatabaseSession:
             await db.close()
 
     @pytest.mark.asyncio
-    async def test_list_conversations_with_turn_counts(self, tmp_db):
+    async def test_list_conversations(self, tmp_db):
         db = Database(tmp_db)
         await db.initialize()
         try:
             c1 = await db.create_conversation("S1")
             c2 = await db.create_conversation("S2")
 
-            await db.log_turn(c1, "user", "hello")
-            await db.log_turn(c1, "assistant", "hi")
-
-            await db.log_turn(c2, "user", "one turn only")
-
             sessions = await db.list_conversations()
             assert len(sessions) == 2
 
-            s1 = next(s for s in sessions if s["id"] == c1)
-            s2 = next(s for s in sessions if s["id"] == c2)
-            assert s1["turn_count"] == 2
-            assert s2["turn_count"] == 1
+            ids = {s["id"] for s in sessions}
+            assert ids == {c1, c2}
+            for s in sessions:
+                assert "title" in s
+                assert "created_at" in s
+                assert "updated_at" in s
         finally:
             await db.close()
 
     @pytest.mark.asyncio
-    async def test_log_turn_persists(self, tmp_db):
+    async def test_update_conversation_timestamp(self, tmp_db):
+        import asyncio
         db = Database(tmp_db)
         await db.initialize()
         try:
             cid = await db.create_conversation("Test")
-            await db.log_turn(cid, "user", "Are you there?")
-            await db.log_turn(cid, "assistant", "Yes, I am.")
-
-            turns = await db.get_conversation_turns(cid)
-            assert len(turns) == 2
-            assert turns[0]["role"] == "user"
-            assert turns[0]["content"] == "Are you there?"
-            assert turns[1]["role"] == "assistant"
-            assert turns[1]["content"] == "Yes, I am."
+            before = (await db.get_conversation(cid))["updated_at"]
+            await asyncio.sleep(1.1)
+            await db.update_conversation_timestamp(cid)
+            after = (await db.get_conversation(cid))["updated_at"]
+            assert after > before
         finally:
             await db.close()
 

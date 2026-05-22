@@ -21,7 +21,7 @@ lingya/
 ├── ingestion/
 │   └── chunker.py         # Recursive token-based text splitter (tiktoken cl100k_base)
 └── storage/
-    ├── db.py              # SQLite via aiosqlite, 5 tables, CRUD methods
+    ├── db.py              # SQLite via aiosqlite, 3 tables, CRUD methods
     └── migrations.py      # 6 ordered SQL migration statements
 ```
 
@@ -136,5 +136,5 @@ Independent from deepagents' LangGraph Memory Store. They serve different purpos
 |-----|--------|
 | Personality evolution | `maybe_evolve()` is a stub — always returns False |
 | MCP tools | Config-driven MCP server connection not yet wired (TODO in main.py) |
-| Persistent checkpointing | Uses in-memory state; conversation lost on restart |
+| Persistent checkpointing | ✅ Resolved — SqliteSaver checkpointer added (a62efaf) |
 | PERSONALITY_CONTEXT_TEMPLATE | Defined in templates.py but unused |

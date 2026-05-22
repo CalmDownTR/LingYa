@@ -75,30 +75,18 @@ class Database:
         await self.conn.commit()
         return cur.lastrowid
 
-    async def log_turn(self, conv_id: int, role: str, content: str) -> None:
-        await self.conn.execute(
-            "INSERT INTO turns (conversation_id, role, content) VALUES (?, ?, ?)",
-            (conv_id, role, content),
-        )
+    async def update_conversation_timestamp(self, conv_id: int) -> None:
         await self.conn.execute(
             "UPDATE conversations SET updated_at=datetime('now') WHERE id=?",
             (conv_id,),
         )
         await self.conn.commit()
 
-    async def get_conversation_turns(self, conv_id: int) -> list[dict]:
-        cur = await self.conn.execute(
-            "SELECT role, content, created_at FROM turns WHERE conversation_id=? ORDER BY id",
-            (conv_id,),
-        )
-        return [dict(row) for row in await cur.fetchall()]
-
     async def list_conversations(self, limit: int = 20) -> list[dict]:
         cur = await self.conn.execute(
-            """SELECT c.id, c.title, c.created_at, c.updated_at,
-                      (SELECT COUNT(*) FROM turns WHERE conversation_id = c.id) AS turn_count
-               FROM conversations c
-               ORDER BY c.updated_at DESC
+            """SELECT id, title, created_at, updated_at
+               FROM conversations
+               ORDER BY updated_at DESC
                LIMIT ?""",
             (limit,),
         )
@@ -112,31 +100,3 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row else None
 
-    # -- Settings --
-
-    async def get_setting(self, key: str) -> str | None:
-        cur = await self.conn.execute("SELECT value FROM settings WHERE key=?", (key,))
-        row = await cur.fetchone()
-        return row["value"] if row else None
-
-    async def set_setting(self, key: str, value: str) -> None:
-        await self.conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value),
-        )
-        await self.conn.commit()
-
-    # -- Reflection log --
-
-    async def log_reflection(
-        self, old_personality: dict | None, new_personality: dict, reason: str
-    ) -> None:
-        await self.conn.execute(
-            "INSERT INTO reflection_log (old_personality, new_personality, reason) VALUES (?, ?, ?)",
-            (
-                json.dumps(old_personality, ensure_ascii=False) if old_personality else None,
-                json.dumps(new_personality, ensure_ascii=False),
-                reason,
-            ),
-        )
-        await self.conn.commit()
