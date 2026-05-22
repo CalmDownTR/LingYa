@@ -32,12 +32,7 @@ class PersonalityMiddleware(AgentMiddleware):
 def _extract_last_user_text(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
-            content = msg.content
-            if isinstance(content, str):
-                return content
-            if isinstance(content, list) and content:
-                first = content[0]
-                if isinstance(first, dict) and "text" in first:
-                    return first["text"]
-                return str(first)
+            for block in msg.content_blocks:
+                if block.get("type") == "text":
+                    return str(block.get("text", ""))
     return ""

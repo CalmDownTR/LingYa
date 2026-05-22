@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from langchain.messages import AIMessage, HumanMessage
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -50,17 +51,14 @@ class LingYaCLI:
 
     async def _invoke_agent(self, user_input: str) -> str:
         result = await self.agent.ainvoke(
-            {"messages": [{"role": "user", "content": user_input}]},
+            {"messages": [HumanMessage(content=user_input)]},
             {"configurable": {"thread_id": self._thread_id}},
         )
 
-        # Extract final AI response
+        # Extract the last AI response, skipping tool results
         messages = result.get("messages", [])
-        response_text = ""
-        if messages:
-            last = messages[-1]
-            content = last.content if hasattr(last, "content") else str(last)
-            response_text = content if isinstance(content, str) else str(content)
+        ais = [m for m in messages if isinstance(m, AIMessage)]
+        response_text = ais[-1].text if ais else ""
 
         # Bump conversation timestamp
         if self._conv_id:
