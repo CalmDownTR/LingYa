@@ -20,8 +20,13 @@ class PersonalityMiddleware(AgentMiddleware):
         user_input = _extract_last_user_text(request.messages)
         personality_prompt = self.engine.get_system_prompt(user_input)
 
-        existing = request.system_message.content if request.system_message else ""
-        new_system = personality_prompt + "\n\n" + (existing if existing else "")
+        existing = ""
+        if request.system_message:
+            for block in request.system_message.content_blocks:
+                if block.get("type") == "text":
+                    existing += block.get("text", "")
+
+        new_system = personality_prompt + "\n\n" + existing if existing else personality_prompt
 
         modified = request.override(
             system_message=SystemMessage(content=new_system)

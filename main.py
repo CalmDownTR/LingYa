@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import SecretStr
 
 load_dotenv()
@@ -41,7 +40,7 @@ async def main() -> None:
     )
     # Tell deepagents the actual context window so summarization triggers
     # at 85% (on-time) instead of falling back to a fixed 170k default.
-    model.profile["max_input_tokens"] = config.llm.max_input_tokens
+    model.profile = {"max_input_tokens": config.llm.max_input_tokens}
 
     # ── Personality (LingYa's unique module, kept as-is) ──
     db = Database(config.db_path)
@@ -50,61 +49,58 @@ async def main() -> None:
     await personality_engine.load()
 
     # ── Checkpointer (persists conversation state across restarts) ──
-    checkpoint_conn = sqlite3.connect(config.db_path, check_same_thread=False)
-    checkpointer = SqliteSaver(checkpoint_conn)
-    checkpointer.setup()
+    async with AsyncSqliteSaver.from_conn_string(config.db_path) as checkpointer:
+        await checkpointer.setup()
+        personality = PersonalityMiddleware(personality_engine)
 
-    personality = PersonalityMiddleware(personality_engine)
+        # ── Memory tools (ChromaDB) ──
+        long_term = LongTermMemory(
+            persist_dir=config.chroma_persist_dir,
+            embedding_model_name=config.embedding_model,
+        )
+        memory_tools = create_memory_tools(long_term)
 
-    # ── Memory tools (ChromaDB) ──
-    long_term = LongTermMemory(
-        persist_dir=config.chroma_persist_dir,
-        embedding_model_name=config.embedding_model,
-    )
-    memory_tools = create_memory_tools(long_term)
+        # ── MCP tools (optional) ──
+        mcp_tools: list = []
+        try:
+            from langchain_mcp_adapters.client import MultiServerMCPClient
+            # If MCP servers are configured, connect and discover tools
+            # mcp_client = MultiServerMCPClient({...})  # TODO: config-driven
+            # mcp_tools = await mcp_client.get_tools()
+            pass
+        except Exception:
+            pass
 
-    # ── MCP tools (optional) ──
-    mcp_tools: list = []
-    try:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
-        # If MCP servers are configured, connect and discover tools
-        # mcp_client = MultiServerMCPClient({...})  # TODO: config-driven
-        # mcp_tools = await mcp_client.get_tools()
-        pass
-    except Exception:
-        pass
+        # ── Agent ──
+        backend = StateBackend()
+        base_prompt = (
+            "You are LingYa, an AI companion with personality and memory.\n"
+            "You have a long-term memory system (search_memory, save_memory) and "
+            "a virtual filesystem (ls, read_file, write_file, edit_file) for "
+            "managing context. Use them when appropriate.\n"
+            "If you can answer directly without tools, just respond naturally."
+        )
 
-    # ── Agent ──
-    backend = StateBackend()
-    base_prompt = (
-        "You are LingYa, an AI companion with personality and memory.\n"
-        "You have a long-term memory system (search_memory, save_memory) and "
-        "a virtual filesystem (ls, read_file, write_file, edit_file) for "
-        "managing context. Use them when appropriate.\n"
-        "If you can answer directly without tools, just respond naturally."
-    )
+        agent = create_deep_agent(
+            model=model,
+            tools=[*memory_tools, *mcp_tools],
+            middleware=[
+                create_summarization_tool_middleware(model, backend=backend),
+                personality,
+            ],
+            system_prompt=base_prompt,
+            backend=backend,
+            checkpointer=checkpointer,
+        )
 
-    agent = create_deep_agent(
-        model=model,
-        tools=[*memory_tools, *mcp_tools],
-        middleware=[
-            create_summarization_tool_middleware(model, backend=backend),
-            personality,
-        ],
-        system_prompt=base_prompt,
-        backend=backend,
-        checkpointer=checkpointer,
-    )
-
-    # ── CLI ──
-    cli = LingYaCLI(agent, personality_engine, db)
-    try:
-        await cli.run()
-    except (KeyboardInterrupt, EOFError):
-        print("\nGoodbye.")
-    finally:
-        checkpoint_conn.close()
-        await db.close()
+        # ── CLI ──
+        cli = LingYaCLI(agent, personality_engine, db)
+        try:
+            await cli.run()
+        except (KeyboardInterrupt, EOFError):
+            print("\nGoodbye.")
+        finally:
+            await db.close()
 
 
 if __name__ == "__main__":
