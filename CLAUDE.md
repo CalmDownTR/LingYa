@@ -30,16 +30,17 @@ LingYa 基于 **deepagents** (`create_deep_agent`) 构建，核心差异点是 *
 main.py → create_deep_agent()
             ├── model: ChatOpenAI (DeepSeek API)
             ├── tools: memory tools (ChromaDB) + MCP tools (optional)
-            ├── middleware: [PersonalityMiddleware]   ← LingYa 核心差异点
+            ├── middleware: [SummarizationToolMiddleware, PersonalityMiddleware]
             ├── system_prompt: base agent prompt
-            └── backend: StateBackend
+            └── backend: StateBackend (shared instance)
 ```
 
 ### Request lifecycle
 1. CLI calls `agent.ainvoke({"messages": [user_msg]}, config)` with thread_id
 2. LangGraph checkpoint loads conversation state
 3. deepagents middleware pipeline:
-   - TodoList, Filesystem, SubAgent, Summarization middleware
+   - Built-in: TodoList, Filesystem, SubAgent, Summarization
+   - **SummarizationToolMiddleware**: optional `compact_conversation` tool
    - **PersonalityMiddleware**: detect situation → adapter activates genome → inject behavioral auth language into system prompt
 4. LLM called with all tools available (memory, filesystem, MCP)
 5. Tool calls executed, response extracted, state checkpointed
@@ -56,7 +57,7 @@ main.py → create_deep_agent()
 | `lingya/memory/tools.py` | Memory tools | search_memory, save_memory as langchain @tool |
 | `lingya/personality/` | Personality | Genome (persistent, 6 traits + 4 switches) + Active mask (runtime, behavioral auth language) + situation detection + perturbation; evolution is a stub |
 | `lingya/ingestion/chunker.py` | Text chunking | Recursive token-based splitter (tiktoken) |
-| `lingya/storage/` | Persistence | SQLite via aiosqlite, 5 tables |
+| `lingya/storage/` | Persistence | SQLite via aiosqlite, 3 tables (personality, conversations, schema_version) |
 | `lingya/embedder.py` | Embeddings | SentenceTransformer wrapper, LRU-cached, async |
 
 ### Configuration

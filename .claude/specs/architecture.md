@@ -22,7 +22,7 @@ lingya/
 │   └── chunker.py         # Recursive token-based text splitter (tiktoken cl100k_base)
 └── storage/
     ├── db.py              # SQLite via aiosqlite, 3 tables, CRUD methods
-    └── migrations.py      # 6 ordered SQL migration statements
+    └── migrations.py      # 3 ordered SQL migration statements
 ```
 
 ## Dependency Graph
@@ -51,9 +51,9 @@ LingYa uses **deepagents** (`create_deep_agent`) as its agent harness, built on 
 create_deep_agent()
   ├── model: ChatOpenAI (DeepSeek API)
   ├── tools: memory tools (ChromaDB) + MCP tools (optional)
-  ├── middleware: [PersonalityMiddleware]   ← LingYa's unique differentiator
+  ├── middleware: [SummarizationToolMiddleware, PersonalityMiddleware]
   ├── system_prompt: base agent prompt
-  └── backend: StateBackend (in-memory virtual filesystem)
+  └── backend: StateBackend (shared with summarization middleware)
 ```
 
 ### Request Lifecycle (deepagents)
@@ -65,8 +65,9 @@ create_deep_agent()
    a. TodoListMiddleware — task planning
    b. FilesystemMiddleware — virtual filesystem tools (ls, read, write, edit)
    c. SubAgentMiddleware — sub-agent spawning
-   d. SummarizationMiddleware — auto context compression
-   e. PersonalityMiddleware — injects behavioral authorization language
+   d. SummarizationMiddleware — auto context compression at 85% token threshold
+   e. SummarizationToolMiddleware — optional `compact_conversation` tool for manual summarization
+   f. PersonalityMiddleware — injects behavioral authorization language (LingYa's differentiator)
 4. LLM called with tools available
 5. Tool calls executed (memory tools, filesystem, MCP tools)
 6. Response extracted, displayed
