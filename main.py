@@ -75,6 +75,7 @@ async def main() -> None:
         pass
 
     # ── Agent ──
+    backend = StateBackend()
     base_prompt = (
         "You are LingYa, an AI companion with personality and memory.\n"
         "You have a long-term memory system (search_memory, save_memory) and "
@@ -87,11 +88,11 @@ async def main() -> None:
         model=model,
         tools=[*memory_tools, *mcp_tools],
         middleware=[
-            create_summarization_tool_middleware(model, backend=StateBackend()),
+            create_summarization_tool_middleware(model, backend=backend),
             personality,
         ],
         system_prompt=base_prompt,
-        backend=StateBackend(),
+        backend=backend,
         checkpointer=checkpointer,
     )
 
