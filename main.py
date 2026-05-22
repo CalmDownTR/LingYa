@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
+from deepagents.middleware.summarization import create_summarization_tool_middleware
 
 from lingya.config import Config, load_config
 from lingya.cli import LingYaCLI
@@ -38,6 +39,9 @@ async def main() -> None:
         base_url=config.llm.api_base_url,
         temperature=config.llm.temperature,
     )
+    # Tell deepagents the actual context window so summarization triggers
+    # at 85% (on-time) instead of falling back to a fixed 170k default.
+    model.profile["max_input_tokens"] = config.llm.max_input_tokens
 
     # ── Personality (LingYa's unique module, kept as-is) ──
     db = Database(config.db_path)
@@ -82,7 +86,10 @@ async def main() -> None:
     agent = create_deep_agent(
         model=model,
         tools=[*memory_tools, *mcp_tools],
-        middleware=[personality],
+        middleware=[
+            create_summarization_tool_middleware(model, backend=StateBackend()),
+            personality,
+        ],
         system_prompt=base_prompt,
         backend=StateBackend(),
         checkpointer=checkpointer,

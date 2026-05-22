@@ -9,11 +9,12 @@ from pydantic import BaseModel
 
 class LLMConfig(BaseModel):
     provider: str = "deepseek"
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
     api_key_env: str = "DEEPSEEK_API_KEY"
     api_base_url: str = "https://api.deepseek.com"
     temperature: float = 0.7
     max_tokens: int = 32768
+    max_input_tokens: int = 1_048_576  # DeepSeek V4 Flash 1M context window, for summarization thresholds
 
 
 class PersonalityConfig(BaseModel):
