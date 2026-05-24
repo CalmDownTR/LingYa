@@ -23,8 +23,6 @@ from lingya.config import Config, load_config
 from lingya.cli import LingYaCLI
 from lingya.memory.long_term import LongTermMemory
 from lingya.memory.tools import create_memory_tools
-from lingya.middleware import PersonalityMiddleware
-from lingya.personality.engine import PersonalityEngine
 from lingya.storage.db import Database
 
 
@@ -42,16 +40,13 @@ async def main() -> None:
     # at 85% (on-time) instead of falling back to a fixed 170k default.
     model.profile = {"max_input_tokens": config.llm.max_input_tokens}
 
-    # ── Personality (LingYa's unique module, kept as-is) ──
+    # ── Database ──
     db = Database(config.db_path)
     await db.initialize()
-    personality_engine = PersonalityEngine(config.personality, db, llm=model)
-    await personality_engine.load()
 
     # ── Checkpointer (persists conversation state across restarts) ──
     async with AsyncSqliteSaver.from_conn_string(config.db_path) as checkpointer:
         await checkpointer.setup()
-        personality = PersonalityMiddleware(personality_engine)
 
         # ── Memory tools (ChromaDB) ──
         long_term = LongTermMemory(
@@ -74,7 +69,7 @@ async def main() -> None:
         # ── Agent ──
         backend = StateBackend()
         base_prompt = (
-            "You are LingYa, an AI companion with personality and memory.\n"
+            "You are LingYa, an AI companion with memory.\n"
             "You have a long-term memory system (search_memory, save_memory) and "
             "a virtual filesystem (ls, read_file, write_file, edit_file) for "
             "managing context. Use them when appropriate.\n"
@@ -86,7 +81,6 @@ async def main() -> None:
             tools=[*memory_tools, *mcp_tools],
             middleware=[
                 create_summarization_tool_middleware(model, backend=backend),
-                personality,
             ],
             system_prompt=base_prompt,
             backend=backend,
@@ -94,7 +88,7 @@ async def main() -> None:
         )
 
         # ── CLI ──
-        cli = LingYaCLI(agent, personality_engine, db)
+        cli = LingYaCLI(agent, db)
         try:
             await cli.run()
         except (KeyboardInterrupt, EOFError):

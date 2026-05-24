@@ -17,14 +17,8 @@ class LLMConfig(BaseModel):
     max_input_tokens: int = 1_048_576  # DeepSeek V4 Flash 1M context window, for summarization thresholds
 
 
-class PersonalityConfig(BaseModel):
-    reflection_interval_turns: int = 10
-    seed_personality: str = ""
-
-
 class Config(BaseModel):
     llm: LLMConfig = LLMConfig()
-    personality: PersonalityConfig = PersonalityConfig()
     db_path: str = "./data/lingya.db"
     chroma_persist_dir: str = "./data/chroma"
     embedding_model: str = "BAAI/bge-small-zh-v1.5"

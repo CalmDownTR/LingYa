@@ -37,44 +37,4 @@ def db(tmp_db_path):
 def mock_db():
     """Mock Database for unit tests that don't need real SQLite."""
     db = MagicMock()
-    db.get_personality = AsyncMock(return_value=None)
-    db.save_personality = AsyncMock()
     return db
-
-
-@pytest.fixture
-def default_genome():
-    """Default PersonalityGenome (LingYa defaults)."""
-    from lingya.personality.model import PersonalityGenome
-
-    return PersonalityGenome()
-
-
-@pytest.fixture
-def genome_with_high_traits():
-    """Genome with all traits at 0.9."""
-    from lingya.personality.model import PersonalityGenome
-
-    return PersonalityGenome(
-        exploration=0.9,
-        analytical_depth=0.9,
-        playfulness=0.9,
-        empathy=0.9,
-        directness=0.9,
-        adaptability=0.9,
-    )
-
-
-@pytest.fixture
-def genome_with_low_traits():
-    """Genome with all traits at 0.1."""
-    from lingya.personality.model import PersonalityGenome
-
-    return PersonalityGenome(
-        exploration=0.1,
-        analytical_depth=0.1,
-        playfulness=0.1,
-        empathy=0.1,
-        directness=0.1,
-        adaptability=0.1,
-    )

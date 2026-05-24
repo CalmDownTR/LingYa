@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import aiosqlite
@@ -48,22 +47,6 @@ class Database:
                 "INSERT INTO schema_version (version) VALUES (?)", (i,)
             )
 
-        await self.conn.commit()
-
-    # -- Personality --
-
-    async def get_personality(self) -> dict | None:
-        cur = await self.conn.execute("SELECT data FROM personality WHERE id = 1")
-        row = await cur.fetchone()
-        return json.loads(row["data"]) if row else None
-
-    async def save_personality(self, data: dict) -> None:
-        await self.conn.execute(
-            """INSERT INTO personality (id, data, updated_at)
-               VALUES (1, ?, datetime('now'))
-               ON CONFLICT(id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at""",
-            (json.dumps(data, ensure_ascii=False),),
-        )
         await self.conn.commit()
 
     # -- Conversations --

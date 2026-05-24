@@ -10,11 +10,6 @@ class TestConfigDefaults:
         cfg = Config()
         assert cfg.llm.provider == "deepseek"
 
-    def test_default_personality_settings(self):
-        cfg = Config()
-        assert cfg.personality.reflection_interval_turns == 10
-
-
 class TestLoadConfig:
     def test_defaults_when_no_file(self, monkeypatch):
         for var in ("LINGYA_CONFIG", "DEEPSEEK_API_KEY", "LINGYA_API_KEY", "LINGYA_LLM_PROVIDER"):

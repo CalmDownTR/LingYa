@@ -8,14 +8,12 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from lingya.personality.engine import PersonalityEngine
 from lingya.storage.db import Database
 
 
 class LingYaCLI:
-    def __init__(self, agent, personality_engine: PersonalityEngine, db: Database) -> None:
+    def __init__(self, agent, db: Database) -> None:
         self.agent = agent
-        self.personality_engine = personality_engine
         self.db = db
         self.console = Console()
         self._conv_id: int | None = None
@@ -84,8 +82,6 @@ class LingYaCLI:
                 raise EOFError()
             case "/help":
                 self._show_help()
-            case "/personality":
-                self._cmd_personality()
             case "/sessions":
                 await self._cmd_sessions()
             case "/new":
@@ -94,11 +90,6 @@ class LingYaCLI:
                 await self._cmd_switch(arg)
             case _:
                 self.console.print(f"[yellow]Unknown command: {command}[/]. Type /help for available commands.")
-
-    def _cmd_personality(self) -> None:
-        p = self.personality_engine.personality
-        prompt = p.to_system_prompt()
-        self.console.print(Panel(prompt, title="Current Personality", border_style="blue"))
 
     async def _cmd_sessions(self) -> None:
         sessions = await self.db.list_conversations()
@@ -138,11 +129,8 @@ class LingYaCLI:
         self.console.print(f"[green]Switched to session #{session_id}: {conv['title']}[/]")
 
     def _print_welcome(self) -> None:
-        p = self.personality_engine.personality
         self.console.print()
         self.console.print(Panel.fit(
-            f"[bold]{p.name}[/] — {p.role}\n"
-            f"Tone: {p.tone}\n\n"
             "Type /help for available commands.",
             border_style="blue",
             title="Welcome",
@@ -154,7 +142,6 @@ class LingYaCLI:
 
 | Command | Description |
 |---------|-------------|
-| `/personality` | View current personality |
 | `/sessions` | List all sessions |
 | `/new` | Start a new session |
 | `/switch <id>` | Switch to a session by ID |

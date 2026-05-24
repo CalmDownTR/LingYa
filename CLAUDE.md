@@ -24,13 +24,13 @@ uv run mypy lingya/        # Type check
 
 完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
 
-LingYa 基于 **deepagents** (`create_deep_agent`) 构建，核心差异点是 **PersonalityMiddleware**。
+LingYa 基于 **deepagents** (`create_deep_agent`) 构建。
 
 ```
 main.py → create_deep_agent()
             ├── model: ChatOpenAI (DeepSeek API)
             ├── tools: memory tools (ChromaDB) + MCP tools (optional)
-            ├── middleware: [SummarizationToolMiddleware, PersonalityMiddleware]
+            ├── middleware: [SummarizationToolMiddleware]
             ├── system_prompt: base agent prompt
             └── backend: StateBackend (shared instance)
 ```
@@ -41,7 +41,6 @@ main.py → create_deep_agent()
 3. deepagents middleware pipeline:
    - Built-in: TodoList, Filesystem, SubAgent, Summarization
    - **SummarizationToolMiddleware**: optional `compact_conversation` tool
-   - **PersonalityMiddleware**: detect situation → adapter activates genome → inject behavioral auth language into system prompt
 4. LLM called with all tools available (memory, filesystem, MCP)
 5. Tool calls executed, response extracted, state checkpointed
 
@@ -50,14 +49,12 @@ main.py → create_deep_agent()
 | Module | Role | Key detail |
 |--------|------|------------|
 | `main.py` | Assembly | Wires model + tools + middleware + CLI |
-| `lingya/cli.py` | Terminal UI | Rich-based, `/personality` `/sessions` `/new` `/switch` |
+| `lingya/cli.py` | Terminal UI | Rich-based, `/sessions` `/new` `/switch` |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay, slimmed down |
-| `lingya/middleware.py` | Personality injection | `AgentMiddleware.awrap_model_call()` — LingYa's differentiator |
 | `lingya/memory/long_term.py` | Long-term memory | ChromaDB + BGE embeddings, cosine search |
 | `lingya/memory/tools.py` | Memory tools | search_memory, save_memory as langchain @tool |
-| `lingya/personality/` | Personality | Genome (persistent, 6 traits + 4 switches) + Active mask (runtime, behavioral auth language) + situation detection + perturbation; evolution is a stub |
 | `lingya/ingestion/chunker.py` | Text chunking | Recursive token-based splitter (tiktoken) |
-| `lingya/storage/` | Persistence | SQLite via aiosqlite, 3 tables (personality, conversations, schema_version) |
+| `lingya/storage/` | Persistence | SQLite via aiosqlite, 2 tables (conversations, schema_version) |
 | `lingya/embedder.py` | Embeddings | SentenceTransformer wrapper, LRU-cached, async |
 
 ### Configuration
