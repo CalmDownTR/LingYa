@@ -26,6 +26,12 @@ Supports any OpenAI-compatible API — edit `config.yaml` to switch between Deep
 |---------|-------------|
 | `/fetch <url>` | Ingest a web page into long-term memory |
 | `/reflect` | Analyze the current conversation |
+| `/memories` | List all stored memories |
+| `/forget <index>` | Delete a memory by its index |
+| `/remember <text>` | Manually add a memory |
+| `/sessions` | List all sessions |
+| `/new` | Start a new session |
+| `/switch <id>` | Switch to a session by ID |
 | `/history` | Show conversation history |
 | `/clear` | Clear short-term memory |
 | `/help` | Show available commands |
@@ -47,7 +53,8 @@ Rich Markdown Response
 
 ### Key Modules
 
-- **Memory** — Short-term with automatic LLM compression + long-term vector store with semantic retrieval
+- **Memory** — Short-term with automatic LLM compression + long-term ChromaDB vector store with semantic retrieval and `memory_store`/`memory_search` agent tools
+- **CLI Commands** — `/memories`, `/forget`, `/remember` for manual memory management
 - **Ingestion** — Recursive text chunking, local embedding model, URL fetcher
 - **LLM Abstraction** — Single backend serves DeepSeek, OpenAI, and Ollama through the same interface
 
@@ -58,8 +65,11 @@ Rich Markdown Response
 
 ## Roadmap
 
-- **v0.1.0** (current) — CLI chat, memory system, web ingestion
-- **v0.2.0** — Web search, file ingestion, autonomous tool use
+- **v0.1.0** — CLI chat, memory system, web ingestion
+- **v0.2.0** (current) — Semantic memory (store + search), agent tool integration, memory management CLI
+- **v0.3.0** — Emotional engine, persona perceptibility
+- **v0.4.0** — Proactive interaction, context reinforcement
+- **v1.0.0** — Quality closed-loop, documentation, community-ready
 
 ## Requirements
 
