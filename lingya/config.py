@@ -20,6 +20,7 @@ class LLMConfig(BaseModel):
 class Config(BaseModel):
     llm: LLMConfig = LLMConfig()
     db_path: str = "./data/lingya.db"
+    memory_path: str = "./data/memory"
     data_dir: str = "./data"
     persona_config_path: str = "agent_config.yaml"
 

@@ -19,8 +19,11 @@ from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.middleware.summarization import create_summarization_tool_middleware
 
+from langchain_core.tools import tool
+
 from lingya.config import load_config
 from lingya.cli import LingYaCLI
+from lingya.memory import MemoryStore
 from lingya.storage.db import Database
 
 
@@ -41,6 +44,39 @@ async def main() -> None:
     # ── Database ──
     db = Database(config.db_path)
     await db.initialize()
+
+    # ── Memory ──
+    memory = MemoryStore(persist_path=config.memory_path)
+
+    @tool
+    def memory_store(text: str) -> str:
+        """Remember important information about the user.
+
+        Use this tool when the user shares personal preferences, identity,
+        emotional states, or context useful for future interactions.
+        Examples: "I like rainy days", "I'm afraid of loneliness",
+        "I'm a freelancer".
+
+        Do NOT use for transient information (e.g. "I'm running late"),
+        one-time tasks, small talk, or credentials/API keys.
+        """
+        return memory.store(text)
+
+    @tool
+    def memory_search(query: str) -> str:
+        """Search for prior memories about the user.
+
+        Use this tool when the user asks "do you remember...", or when you
+        need to recall context from past conversations to answer accurately.
+        Returns matching memories with their text content.
+        """
+        results = memory.search(query)
+        if not results:
+            return "(No matching memories found)"
+        lines = []
+        for r in results:
+            lines.append(f"[{r['id']}] {r['text']}")
+        return "\n".join(lines)
 
     # ── Checkpointer (persists conversation state across restarts) ──
     async with AsyncSqliteSaver.from_conn_string(config.db_path) as checkpointer:
@@ -69,7 +105,7 @@ async def main() -> None:
 
         agent = create_deep_agent(
             model=model,
-            tools=[*mcp_tools],
+            tools=[*mcp_tools, memory_store, memory_search],
             middleware=[
                 create_summarization_tool_middleware(model, backend=backend),
             ],
@@ -79,7 +115,7 @@ async def main() -> None:
         )
 
         # ── CLI ──
-        cli = LingYaCLI(agent, db)
+        cli = LingYaCLI(agent, db, memory)
         try:
             await cli.run()
         except (KeyboardInterrupt, EOFError):

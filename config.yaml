@@ -8,3 +8,4 @@ llm:
 
 db_path: ./data/lingya.db
 data_dir: ./data
+memory_path: ./data/memory

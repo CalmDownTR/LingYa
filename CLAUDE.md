@@ -13,11 +13,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv sync                    # Install all dependencies
-uv run python main.py      # Run the app
-uv run pytest -s           # Run tests
-uv run ruff check lingya/  # Lint
-uv run mypy lingya/        # Type check
+uv sync                          # Install all dependencies
+uv add <package>                 # Add a runtime dependency
+uv add --dev <package>           # Add a dev dependency
+uv run python main.py            # Run the app
+uv run pytest -s                 # Run tests
+uv run ruff check lingya/        # Lint
+uv run mypy lingya/              # Type check
 ```
 
 ## Architecture
@@ -29,7 +31,7 @@ LingYa 基于 **deepagents** (`create_deep_agent`) 构建。
 ```
 main.py → create_deep_agent()
             ├── model: ChatOpenAI (DeepSeek API)
-            ├── tools: MCP tools (optional)
+            ├── tools: [memory_store, memory_search] + MCP tools (optional)
             ├── middleware: [SummarizationToolMiddleware]
             ├── system_prompt: base agent prompt
             └── backend: StateBackend (shared instance)
@@ -52,6 +54,7 @@ main.py → create_deep_agent()
 | `lingya/cli.py` | Terminal UI | Rich-based, `/sessions` `/new` `/switch` |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay, slimmed down |
 | `lingya/persona/` | Persona | Dynamic prompt assembly via mind_core + tone_matrix |
+| `lingya/memory/` | Memory | ChromaDB-backed semantic memory, `store` + `search` + `list_all` + `delete` |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, 2 tables (conversations, schema_version) |
 
 ### Configuration

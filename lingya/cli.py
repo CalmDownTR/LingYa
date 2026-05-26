@@ -12,9 +12,10 @@ from lingya.storage.db import Database
 
 
 class LingYaCLI:
-    def __init__(self, agent, db: Database) -> None:
+    def __init__(self, agent, db: Database, memory=None) -> None:
         self.agent = agent
         self.db = db
+        self.memory = memory
         self.console = Console()
         self._conv_id: int | None = None
         self._thread_id: str = "default"
@@ -88,6 +89,12 @@ class LingYaCLI:
                 await self._cmd_new_session()
             case "/switch":
                 await self._cmd_switch(arg)
+            case "/memories":
+                self._cmd_memories()
+            case "/forget":
+                self._cmd_forget(arg)
+            case "/remember":
+                self._cmd_remember(arg)
             case _:
                 self.console.print(f"[yellow]Unknown command: {command}[/]. Type /help for available commands.")
 
@@ -128,6 +135,48 @@ class LingYaCLI:
         self._thread_id = str(session_id)
         self.console.print(f"[green]Switched to session #{session_id}: {conv['title']}[/]")
 
+    def _cmd_memories(self) -> None:
+        if self.memory is None:
+            self.console.print("[yellow]Memory system not available.[/]")
+            return
+        items = self.memory.list_all()
+        if not items:
+            self.console.print("[dim]No memories stored yet.[/]")
+            return
+        self.console.print()
+        for i, item in enumerate(items, 1):
+            self.console.print(f"  [bold][{i}][/] {item['text']}")
+
+    def _cmd_forget(self, arg: str) -> None:
+        if self.memory is None:
+            self.console.print("[yellow]Memory system not available.[/]")
+            return
+        if not arg:
+            self.console.print("[yellow]Usage: /forget <index>[/]")
+            return
+        try:
+            index = int(arg)
+        except ValueError:
+            self.console.print("[yellow]Index must be a number (use /memories to see indices).[/]")
+            return
+        items = self.memory.list_all()
+        if index < 1 or index > len(items):
+            self.console.print(f"[yellow]Index {index} out of range (1-{len(items)}).[/]")
+            return
+        mem_id = items[index - 1]["id"]
+        self.memory.delete(mem_id)
+        self.console.print(f"[green]Forgot: {items[index - 1]['text']}[/]")
+
+    def _cmd_remember(self, arg: str) -> None:
+        if self.memory is None:
+            self.console.print("[yellow]Memory system not available.[/]")
+            return
+        if not arg:
+            self.console.print("[yellow]Usage: /remember <text>[/]")
+            return
+        mem_id = self.memory.store(arg)
+        self.console.print(f"[green]Remembered: {arg} (id: {mem_id})[/]")
+
     def _print_welcome(self) -> None:
         self.console.print()
         self.console.print(Panel.fit(
@@ -145,6 +194,9 @@ class LingYaCLI:
 | `/sessions` | List all sessions |
 | `/new` | Start a new session |
 | `/switch <id>` | Switch to a session by ID |
+| `/memories` | List all stored memories |
+| `/forget <index>` | Delete a memory by its index |
+| `/remember <text>` | Manually add a memory |
 | `/help` | Show this help |
 | `/exit`, `/quit` | Exit LingYa |
 

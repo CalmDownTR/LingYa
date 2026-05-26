@@ -11,6 +11,9 @@ agent_config.yaml          # Persona config: mind_core, tone_matrix, behavior_gu
 lingya/
 ├── cli.py                 # LingYaCLI — Rich interactive terminal loop
 ├── config.py              # Pydantic models: Config, LLMConfig
+├── memory/
+│   ├── __init__.py        # Exports MemoryStore
+│   └── store.py           # MemoryStore — ChromaDB PersistentClient, store/search/list_all/delete
 ├── persona/
 │   ├── config.py          # Pydantic models: PersonaConfig, MindCore, ToneMatrix + YAML loader
 │   ├── bucketing.py       # Interval bucketing: map_warmth(), map_formality() (if-elif)
@@ -32,9 +35,11 @@ tests/
 ## Dependency Graph
 
 ```
-main.py → config, cli, persona/assembler, storage/db
+main.py → config, cli, memory, persona/assembler, storage/db
 
-cli.py → storage/db
+cli.py → storage/db, memory
+
+memory/store.py → (chromadb)
 
 persona/assembler.py → persona/config.py, persona/bucketing.py
 
@@ -50,7 +55,7 @@ LingYa uses **deepagents** (`create_deep_agent`) as its agent harness, built on 
 ```
 create_deep_agent()
   ├── model: ChatOpenAI (DeepSeek API)
-  ├── tools: MCP tools (optional)
+  ├── tools: [memory_store, memory_search] + MCP tools (optional)
   ├── middleware: [SummarizationToolMiddleware]
   ├── system_prompt: PromptAssembler.assemble() — persona-driven dynamic prompt
   └── backend: StateBackend (shared with summarization middleware)
