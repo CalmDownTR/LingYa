@@ -20,8 +20,6 @@ class LLMConfig(BaseModel):
 class Config(BaseModel):
     llm: LLMConfig = LLMConfig()
     db_path: str = "./data/lingya.db"
-    chroma_persist_dir: str = "./data/chroma"
-    embedding_model: str = "BAAI/bge-small-zh-v1.5"
     data_dir: str = "./data"
     persona_config_path: str = "agent_config.yaml"
 

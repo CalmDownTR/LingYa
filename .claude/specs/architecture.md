@@ -1,4 +1,4 @@
-# Architecture Spec (2026-05-24)
+# Architecture Spec (2026-05-26)
 
 ## File Tree
 
@@ -11,16 +11,10 @@ agent_config.yaml          # Persona config: mind_core, tone_matrix, behavior_gu
 lingya/
 ├── cli.py                 # LingYaCLI — Rich interactive terminal loop
 ├── config.py              # Pydantic models: Config, LLMConfig
-├── embedder.py            # SentenceTransformer wrapper, LRU-cached, async
 ├── persona/
 │   ├── config.py          # Pydantic models: PersonaConfig, MindCore, ToneMatrix + YAML loader
 │   ├── bucketing.py       # Interval bucketing: map_warmth(), map_formality() (if-elif)
 │   └── assembler.py       # PromptAssembler: config + bucketing → system prompt
-├── memory/
-│   ├── long_term.py       # ChromaDB PersistentClient, BGE embeddings, cosine search
-│   └── tools.py           # search_memory / save_memory langchain tools
-├── ingestion/
-│   └── chunker.py         # Recursive token-based text splitter (tiktoken cl100k_base)
 └── storage/
     ├── db.py              # SQLite via aiosqlite, 2 tables, CRUD methods
     └── migrations.py      # 2 ordered SQL migration statements
@@ -31,23 +25,18 @@ tests/
 ├── test_persona_bucketing.py  # Bucketing boundary value tests
 ├── test_persona_assembler.py  # Prompt structure verification
 ├── eval_runner.py         # E2E runner: LLM calls + pass/fail checks
-├── test_chunker.py        # Text chunking tests
 ├── test_config.py         # Config loading tests
-├── test_memory_tools.py   # Memory tool tests
 └── test_session.py        # Session management tests
 ```
 
 ## Dependency Graph
 
 ```
-main.py → config, cli, persona/assembler, memory/long_term, memory/tools, storage/db
+main.py → config, cli, persona/assembler, storage/db
 
 cli.py → storage/db
 
 persona/assembler.py → persona/config.py, persona/bucketing.py
-
-memory/tools.py → memory/long_term, ingestion/chunker
-memory/long_term.py → embedder
 
 storage/db.py → storage/migrations
 ```
@@ -61,7 +50,7 @@ LingYa uses **deepagents** (`create_deep_agent`) as its agent harness, built on 
 ```
 create_deep_agent()
   ├── model: ChatOpenAI (DeepSeek API)
-  ├── tools: memory tools (ChromaDB) + MCP tools (optional)
+  ├── tools: MCP tools (optional)
   ├── middleware: [SummarizationToolMiddleware]
   ├── system_prompt: PromptAssembler.assemble() — persona-driven dynamic prompt
   └── backend: StateBackend (shared with summarization middleware)
@@ -91,20 +80,10 @@ create_deep_agent()
    d. SummarizationMiddleware — auto context compression at 85% token threshold
    e. SummarizationToolMiddleware — optional `compact_conversation` tool for manual summarization
 4. LLM called with tools available
-5. Tool calls executed (memory tools, filesystem, MCP tools)
+5. Tool calls executed (MCP tools)
 6. Response extracted, displayed
 7. State checkpointed by LangGraph
 ```
-
-## Long-Term Memory
-
-ChromaDB with BGE embeddings, exposed as two langchain tools:
-- `search_memory(query)` — semantic search across stored memories
-- `save_memory(content, source)` — chunk and store new memories
-
-Independent from deepagents' LangGraph Memory Store. They serve different purposes:
-- ChromaDB: semantic search over ingested content and saved facts
-- LangGraph Store: cross-session agent state (future use)
 
 ## Known Gaps
 

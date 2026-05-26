@@ -7,6 +7,4 @@ llm:
   max_tokens: 32768
 
 db_path: ./data/lingya.db
-chroma_persist_dir: ./data/chroma
-embedding_model: ./data/models/bge-small-zh-v1.5
 data_dir: ./data

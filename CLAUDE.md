@@ -29,7 +29,7 @@ LingYa 基于 **deepagents** (`create_deep_agent`) 构建。
 ```
 main.py → create_deep_agent()
             ├── model: ChatOpenAI (DeepSeek API)
-            ├── tools: memory tools (ChromaDB) + MCP tools (optional)
+            ├── tools: MCP tools (optional)
             ├── middleware: [SummarizationToolMiddleware]
             ├── system_prompt: base agent prompt
             └── backend: StateBackend (shared instance)
@@ -41,7 +41,7 @@ main.py → create_deep_agent()
 3. deepagents middleware pipeline:
    - Built-in: TodoList, Filesystem, SubAgent, Summarization
    - **SummarizationToolMiddleware**: optional `compact_conversation` tool
-4. LLM called with all tools available (memory, filesystem, MCP)
+4. LLM called with all tools available (MCP)
 5. Tool calls executed, response extracted, state checkpointed
 
 ### Modules at a glance
@@ -51,15 +51,12 @@ main.py → create_deep_agent()
 | `main.py` | Assembly | Wires model + tools + middleware + CLI |
 | `lingya/cli.py` | Terminal UI | Rich-based, `/sessions` `/new` `/switch` |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay, slimmed down |
-| `lingya/memory/long_term.py` | Long-term memory | ChromaDB + BGE embeddings, cosine search |
-| `lingya/memory/tools.py` | Memory tools | search_memory, save_memory as langchain @tool |
-| `lingya/ingestion/chunker.py` | Text chunking | Recursive token-based splitter (tiktoken) |
+| `lingya/persona/` | Persona | Dynamic prompt assembly via mind_core + tone_matrix |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, 2 tables (conversations, schema_version) |
-| `lingya/embedder.py` | Embeddings | SentenceTransformer wrapper, LRU-cached, async |
 
 ### Configuration
 - `config.yaml` — runtime settings (safe to commit)
-- `.env` — secrets: `DEEPSEEK_API_KEY`, `LINGYA_API_KEY`, `HF_ENDPOINT`
+- `.env` — secrets: `DEEPSEEK_API_KEY`, `LINGYA_API_KEY`
 
 ## 协作流程
 

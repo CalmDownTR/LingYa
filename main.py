@@ -19,10 +19,8 @@ from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.middleware.summarization import create_summarization_tool_middleware
 
-from lingya.config import Config, load_config
+from lingya.config import load_config
 from lingya.cli import LingYaCLI
-from lingya.memory.long_term import LongTermMemory
-from lingya.memory.tools import create_memory_tools
 from lingya.storage.db import Database
 
 
@@ -48,13 +46,6 @@ async def main() -> None:
     async with AsyncSqliteSaver.from_conn_string(config.db_path) as checkpointer:
         await checkpointer.setup()
 
-        # ── Memory tools (ChromaDB) ──
-        long_term = LongTermMemory(
-            persist_dir=config.chroma_persist_dir,
-            embedding_model_name=config.embedding_model,
-        )
-        memory_tools = create_memory_tools(long_term)
-
         # ── MCP tools (optional) ──
         mcp_tools: list = []
         try:
@@ -78,7 +69,7 @@ async def main() -> None:
 
         agent = create_deep_agent(
             model=model,
-            tools=[*memory_tools, *mcp_tools],
+            tools=[*mcp_tools],
             middleware=[
                 create_summarization_tool_middleware(model, backend=backend),
             ],
