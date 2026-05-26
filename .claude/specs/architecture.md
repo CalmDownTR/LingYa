@@ -6,10 +6,16 @@
 main.py                    # Entry point: loads .env, wires agent + CLI
 config.yaml                # Runtime config (safe to commit)
 
+agent_config.yaml          # Persona config: mind_core, tone_matrix, behavior_guardrails
+
 lingya/
 ├── cli.py                 # LingYaCLI — Rich interactive terminal loop
 ├── config.py              # Pydantic models: Config, LLMConfig
 ├── embedder.py            # SentenceTransformer wrapper, LRU-cached, async
+├── persona/
+│   ├── config.py          # Pydantic models: PersonaConfig, MindCore, ToneMatrix + YAML loader
+│   ├── bucketing.py       # Interval bucketing: map_warmth(), map_formality() (if-elif)
+│   └── assembler.py       # PromptAssembler: config + bucketing → system prompt
 ├── memory/
 │   ├── long_term.py       # ChromaDB PersistentClient, BGE embeddings, cosine search
 │   └── tools.py           # search_memory / save_memory langchain tools
@@ -18,14 +24,27 @@ lingya/
 └── storage/
     ├── db.py              # SQLite via aiosqlite, 2 tables, CRUD methods
     └── migrations.py      # 2 ordered SQL migration statements
+
+tests/
+├── cases.json             # Persona eval Corner Case definitions (mock history for long-context test)
+├── conftest.py            # pytest fixtures (DB + persona)
+├── test_persona_bucketing.py  # Bucketing boundary value tests
+├── test_persona_assembler.py  # Prompt structure verification
+├── eval_runner.py         # E2E runner: LLM calls + pass/fail checks
+├── test_chunker.py        # Text chunking tests
+├── test_config.py         # Config loading tests
+├── test_memory_tools.py   # Memory tool tests
+└── test_session.py        # Session management tests
 ```
 
 ## Dependency Graph
 
 ```
-main.py → config, cli, memory/long_term, memory/tools, storage/db
+main.py → config, cli, persona/assembler, memory/long_term, memory/tools, storage/db
 
 cli.py → storage/db
+
+persona/assembler.py → persona/config.py, persona/bucketing.py
 
 memory/tools.py → memory/long_term, ingestion/chunker
 memory/long_term.py → embedder
@@ -44,9 +63,21 @@ create_deep_agent()
   ├── model: ChatOpenAI (DeepSeek API)
   ├── tools: memory tools (ChromaDB) + MCP tools (optional)
   ├── middleware: [SummarizationToolMiddleware]
-  ├── system_prompt: base agent prompt
+  ├── system_prompt: PromptAssembler.assemble() — persona-driven dynamic prompt
   └── backend: StateBackend (shared with summarization middleware)
 ```
+
+### Persona System (Phase 1)
+
+`agent_config.yaml` defines three orthogonal concerns:
+- **mind_core**: immutable identity — who the AI is
+- **tone_matrix**: warmth (0-100) and formality (0-100) — how the AI speaks
+- **behavior_guardrails**: blacklist rules with highest execution priority
+
+`PromptAssembler` assembles the final system prompt in fixed order:
+1. `# ROLE IDENTITY` — mind_core.identity + core_belief
+2. `# INTERACTION STYLE` — bucketed warmth + formality instructions
+3. `# STRICT NEGATIVE BOUNDARIES` — guardrails at bottom (recency bias)
 
 ### Request Lifecycle (deepagents)
 

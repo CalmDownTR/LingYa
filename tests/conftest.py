@@ -38,3 +38,17 @@ def mock_db():
     """Mock Database for unit tests that don't need real SQLite."""
     db = MagicMock()
     return db
+
+
+@pytest.fixture(scope="module")
+def persona_config():
+    from lingya.persona import load_persona_config
+
+    return load_persona_config("agent_config.yaml")
+
+
+@pytest.fixture(scope="module")
+def assembler(persona_config):
+    from lingya.persona import PromptAssembler
+
+    return PromptAssembler(persona_config)

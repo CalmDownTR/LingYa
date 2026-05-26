@@ -23,6 +23,7 @@ class Config(BaseModel):
     chroma_persist_dir: str = "./data/chroma"
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     data_dir: str = "./data"
+    persona_config_path: str = "agent_config.yaml"
 
 
 def load_config(path: str | None = None) -> Config:

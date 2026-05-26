@@ -66,15 +66,15 @@ async def main() -> None:
         except Exception:
             pass
 
+        # ── Persona ──
+        from lingya.persona import PromptAssembler, load_persona_config
+
+        persona_config = load_persona_config(config.persona_config_path)
+        assembler = PromptAssembler(persona_config)
+        system_prompt = assembler.assemble()
+
         # ── Agent ──
         backend = StateBackend()
-        base_prompt = (
-            "You are LingYa, an AI companion with memory.\n"
-            "You have a long-term memory system (search_memory, save_memory) and "
-            "a virtual filesystem (ls, read_file, write_file, edit_file) for "
-            "managing context. Use them when appropriate.\n"
-            "If you can answer directly without tools, just respond naturally."
-        )
 
         agent = create_deep_agent(
             model=model,
@@ -82,7 +82,7 @@ async def main() -> None:
             middleware=[
                 create_summarization_tool_middleware(model, backend=backend),
             ],
-            system_prompt=base_prompt,
+            system_prompt=system_prompt,
             backend=backend,
             checkpointer=checkpointer,
         )
