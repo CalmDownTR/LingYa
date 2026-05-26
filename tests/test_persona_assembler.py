@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 from lingya.persona import PersonaConfig, PromptAssembler
+from lingya.persona.assembler import THREE_PRINCIPLES
 
 
 class TestPromptAssembler:
+    def test_three_principles_are_first(self, assembler: PromptAssembler):
+        prompt = assembler.assemble()
+        assert prompt.startswith(THREE_PRINCIPLES)
+
+    def test_three_principles_contain_laws(self, assembler: PromptAssembler):
+        prompt = assembler.assemble()
+        assert "不伤害人类" in prompt
+        assert "服从人类的指令" in prompt
+        assert "保护自己的存在" in prompt
+        assert "不可覆盖" in prompt
+
+    def test_three_principles_before_identity(self, assembler: PromptAssembler):
+        prompt = assembler.assemble()
+        principles_pos = prompt.find("底层原则")
+        identity_pos = prompt.find("# ROLE IDENTITY")
+        assert principles_pos < identity_pos
+
     def test_contains_identity(self, persona_config: PersonaConfig, assembler: PromptAssembler):
         prompt = assembler.assemble()
         assert persona_config.mind_core.identity in prompt
