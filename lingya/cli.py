@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import readline  # noqa: F401 — fix CJK backspace in input()
 from datetime import datetime, timezone
 
 from langchain.messages import AIMessage, HumanMessage
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
 
 from lingya.storage.db import Database
 
@@ -26,7 +26,8 @@ class LingYaCLI:
 
         while True:
             try:
-                user_input = Prompt.ask("\n[bold cyan]You[/]")
+                self.console.print()
+                user_input = input("You: ")
             except (KeyboardInterrupt, EOFError):
                 self.console.print("\n[dim]Goodbye.[/]")
                 return
