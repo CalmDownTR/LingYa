@@ -47,6 +47,7 @@ async def main() -> None:
 
     # ── Memory ──
     memory = MemoryStore(persist_path=config.memory_path)
+    memory.warmup()  # download the embedding model before entering the chat loop
 
     @tool
     def memory_store(text: str) -> str:

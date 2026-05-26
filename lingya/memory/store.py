@@ -11,6 +11,30 @@ class MemoryStore:
         self._client = None
         self._collection = None
 
+    def warmup(self) -> None:
+        """Pre-load the embedding model at startup so the first user message
+        doesn't stall on model download and leak a progress bar into the chat.
+        """
+        import io
+        import os
+        from contextlib import redirect_stderr
+
+        old = os.environ.get("TQDM_DISABLE")
+        os.environ["TQDM_DISABLE"] = "1"
+        try:
+            with redirect_stderr(io.StringIO()):
+                self._ensure_client()
+                try:
+                    self._collection.add(documents=["warmup"], ids=["_warmup"])
+                    self._collection.delete(ids=["_warmup"])
+                except Exception:
+                    pass
+        finally:
+            if old is not None:
+                os.environ["TQDM_DISABLE"] = old
+            else:
+                os.environ.pop("TQDM_DISABLE", None)
+
     def _ensure_client(self):
         if self._client is None:
             import chromadb
