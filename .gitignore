@@ -22,6 +22,12 @@ product/
 .claude/*
 !.claude/specs/
 
+# CodeGraph (machine-specific index)
+.codegraph/
+
+# Claude Code MCP config
+.mcp.json
+
 # Data
 data/
 
