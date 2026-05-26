@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 
@@ -53,7 +54,7 @@ class MemoryStore:
     def store(self, text: str) -> str:
         """Store a memory. Returns the entry ID."""
         col = self.collection
-        entry_id = f"mem_{datetime.now(timezone.utc).timestamp():.0f}"
+        entry_id = f"mem_{time.monotonic_ns()}"
         col.add(
             documents=[text],
             ids=[entry_id],
