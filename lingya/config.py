@@ -23,6 +23,7 @@ class Config(BaseModel):
     memory_path: str = "./data/memory"
     data_dir: str = "./data"
     persona_config_path: str = "agent_config.yaml"
+    diary_period_days: int = 1
 
 
 def load_config(path: str | None = None) -> Config:

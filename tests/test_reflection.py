@@ -90,3 +90,36 @@ class TestDatabaseTurns:
         cid = await db.create_conversation("Empty")
         turns = await db.get_turns(cid)
         assert turns == []
+
+    async def test_get_turns_since_filters_by_date(self, db):
+        cid = await db.create_conversation("Test date filter")
+        await db.add_turn(cid, "user", "old message")
+        await db.add_turn(cid, "ai", "old reply")
+
+        # Get turns since far future — should be empty
+        turns = await db.get_turns_since("2099-01-01", limit=100)
+        assert len(turns) == 0
+
+        # Get turns since epoch — should include all
+        turns = await db.get_turns_since("1970-01-01", limit=100)
+        assert len(turns) >= 2
+
+    async def test_get_turns_since_includes_conv_metadata(self, db):
+        cid = await db.create_conversation("Metadata test")
+        await db.add_turn(cid, "user", "hello")
+
+        turns = await db.get_turns_since("1970-01-01", limit=100)
+        assert len(turns) >= 1
+        assert turns[0]["conv_id"] == cid
+        assert turns[0]["conv_title"] == "Metadata test"
+        assert turns[0]["role"] == "user"
+        assert turns[0]["content"] == "hello"
+        assert "created_at" in turns[0]
+
+    async def test_get_turns_since_respects_limit(self, db):
+        cid = await db.create_conversation("Limit test")
+        for i in range(5):
+            await db.add_turn(cid, "user", f"msg {i}")
+
+        turns = await db.get_turns_since("1970-01-01", limit=2)
+        assert len(turns) == 2

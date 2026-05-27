@@ -107,3 +107,18 @@ class Database:
         # Reverse to chronological order
         return [dict(r) for r in reversed(rows)]
 
+    async def get_turns_since(
+        self, since_date: str, limit: int = 200
+    ) -> list[dict]:
+        cur = await self.conn.execute(
+            """SELECT t.role, t.content, t.created_at,
+                      c.id as conv_id, c.title as conv_title
+               FROM turns t
+               JOIN conversations c ON t.conversation_id = c.id
+               WHERE t.created_at > ?
+               ORDER BY t.id ASC
+               LIMIT ?""",
+            (since_date, limit),
+        )
+        return [dict(row) for row in await cur.fetchall()]
+

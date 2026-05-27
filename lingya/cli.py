@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import readline  # noqa: F401 — fix CJK backspace in input()
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from langchain.messages import AIMessage, HumanMessage
 from langchain_core.language_models import BaseChatModel
@@ -22,12 +22,16 @@ class LingYaCLI:
         model: BaseChatModel,
         persona_config: PersonaConfig,
         memory=None,
+        data_dir: str = "./data",
+        diary_period_days: int = 1,
     ) -> None:
         self.agent = agent
         self.db = db
         self._model = model
         self._persona_config = persona_config
         self.memory = memory
+        self._data_dir = data_dir
+        self._diary_period_days = diary_period_days
         self.console = Console()
         self._conv_id: int | None = None
         self._thread_id: str = "default"
@@ -36,6 +40,10 @@ class LingYaCLI:
         self._print_welcome()
         await self._ensure_conversation()
         await self._show_opening()
+
+        new_diary = await self._maybe_generate_diary()
+        if new_diary:
+            self.console.print("[dim]📔 我写了一篇新日记。输入 /diary 查看。[/]")
 
         while True:
             try:
@@ -112,6 +120,8 @@ class LingYaCLI:
                 self._cmd_forget(arg)
             case "/remember":
                 self._cmd_remember(arg)
+            case "/diary":
+                self._cmd_diary(arg)
             case _:
                 self.console.print(f"[yellow]Unknown command: {command}[/]. Type /help for available commands.")
 
@@ -193,6 +203,96 @@ class LingYaCLI:
             return
         mem_id = self.memory.store(arg)
         self.console.print(f"[green]Remembered: {arg} (id: {mem_id})[/]")
+
+    def _cmd_diary(self, arg: str) -> None:
+        from lingya.diary import get_diary_dir, list_diaries, read_diary
+
+        diary_dir = get_diary_dir(self._data_dir)
+
+        if arg == "list":
+            diaries = list_diaries(diary_dir)
+            if not diaries:
+                self.console.print("[dim]还没有日记。[/]")
+                return
+            self.console.print()
+            self.console.print("[bold]📔 LingYa 的日记[/]")
+            self.console.print("─" * 40)
+            for i, d in enumerate(diaries, 1):
+                date_str = d["date"].strftime("%Y年%m月%d日")
+                preview = d.get("preview", "")
+                self.console.print(f"  [bold][{i}][/] {date_str}  [dim]{preview}[/]")
+            self.console.print("─" * 40)
+            self.console.print(f"共 {len(diaries)} 篇日记。输入 /diary <编号> 查看。")
+        elif arg.isdigit():
+            index = int(arg) - 1
+            result = read_diary(diary_dir, index)
+            if result is None:
+                self.console.print(f"[yellow]没有第 {arg} 篇日记。[/]")
+                return
+            diary_date, content = result
+            self._show_diary(diary_date, content)
+        elif arg:
+            self.console.print("[yellow]用法: /diary | /diary list | /diary <编号>[/]")
+        else:
+            result = read_diary(diary_dir, 0)
+            if result is None:
+                self.console.print("[dim]还没有日记。LingYa 会在适当的时候写日记。[/]")
+                return
+            diary_date, content = result
+            self._show_diary(diary_date, content)
+
+    def _show_diary(self, diary_date, content: str) -> None:
+        self.console.print()
+        self.console.print("[bold]📔 LingYa 的日记[/]")
+        self.console.print("━" * 40)
+        self.console.print(f"[bold]{diary_date.strftime('%Y年%m月%d日')}[/]")
+        self.console.print()
+        self.console.print(Markdown(content))
+        self.console.print("━" * 40)
+
+    async def _maybe_generate_diary(self) -> bool:
+        """Check if a diary should be generated, generate it if so.
+
+        Returns True if a new diary was written.
+        """
+        from lingya.diary import (
+            format_transcript,
+            generate_diary,
+            get_diary_dir,
+            get_last_diary_date,
+            has_deep_conversation,
+            save_diary,
+            should_generate_diary,
+        )
+
+        diary_dir = get_diary_dir(self._data_dir)
+
+        if not should_generate_diary(diary_dir, self._diary_period_days):
+            return False
+
+        last_date = get_last_diary_date(diary_dir)
+        since = last_date.isoformat() if last_date else "1970-01-01"
+
+        turns = await self.db.get_turns_since(since, limit=200)
+
+        if not has_deep_conversation(turns):
+            return False
+
+        transcript = format_transcript(turns)
+
+        with self.console.status("[dim]Writing in diary...[/]"):
+            try:
+                content = await generate_diary(
+                    self._model, self._persona_config, transcript
+                )
+            except Exception:
+                return False
+
+        if not content:
+            return False
+
+        save_diary(diary_dir, date.today(), content)
+        return True
 
     def _print_welcome(self) -> None:
         self.console.print()
