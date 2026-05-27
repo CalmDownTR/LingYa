@@ -33,3 +33,4 @@ data/
 
 # Environment (secrets)
 .env
+agent_config.yaml

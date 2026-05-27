@@ -1,0 +1,22 @@
+# LingYa Persona Configuration
+# Copy this file to agent_config.yaml and edit to customize your agent's personality.
+#   cp agent_config.example.yaml agent_config.yaml
+#
+# All fields are required. See documentation for details.
+
+version: "1.0.0-mvp"
+meta:
+  agent_id: "your_agent_id"
+  created_at: "2026-01-01"
+
+mind_core:
+  identity: "Describe your agent's identity and role"
+  core_belief: "What is the core belief that drives your agent's behavior?"
+
+tone_matrix:
+  warmth: 50      # 0-100, lower = colder/more detached
+  formality: 50    # 0-100, higher = more formal
+
+behavior_guardrails:
+  - "Example: keep responses under 150 characters"
+  - "Example: do not use rhetorical questions at end of responses"
