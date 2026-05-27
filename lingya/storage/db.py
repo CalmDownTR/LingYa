@@ -83,3 +83,27 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row else None
 
+    # -- Turns --
+
+    async def add_turn(self, conversation_id: int, role: str, content: str) -> None:
+        await self.conn.execute(
+            "INSERT INTO turns (conversation_id, role, content) VALUES (?, ?, ?)",
+            (conversation_id, role, content),
+        )
+        await self.conn.commit()
+
+    async def get_turns(
+        self, conversation_id: int, limit: int = 6
+    ) -> list[dict]:
+        cur = await self.conn.execute(
+            """SELECT role, content
+               FROM turns
+               WHERE conversation_id = ?
+               ORDER BY id DESC
+               LIMIT ?""",
+            (conversation_id, limit),
+        )
+        rows = await cur.fetchall()
+        # Reverse to chronological order
+        return [dict(r) for r in reversed(rows)]
+

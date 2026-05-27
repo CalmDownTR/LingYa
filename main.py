@@ -116,7 +116,7 @@ async def main() -> None:
         )
 
         # ── CLI ──
-        cli = LingYaCLI(agent, db, memory)
+        cli = LingYaCLI(agent, db, model, persona_config, memory)
         try:
             await cli.run()
         except (KeyboardInterrupt, EOFError):

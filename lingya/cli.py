@@ -4,17 +4,29 @@ import readline  # noqa: F401 — fix CJK backspace in input()
 from datetime import datetime, timezone
 
 from langchain.messages import AIMessage, HumanMessage
+from langchain_core.language_models import BaseChatModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from lingya.persona.config import PersonaConfig
+from lingya.reflection import generate_opening_line
 from lingya.storage.db import Database
 
 
 class LingYaCLI:
-    def __init__(self, agent, db: Database, memory=None) -> None:
+    def __init__(
+        self,
+        agent,
+        db: Database,
+        model: BaseChatModel,
+        persona_config: PersonaConfig,
+        memory=None,
+    ) -> None:
         self.agent = agent
         self.db = db
+        self._model = model
+        self._persona_config = persona_config
         self.memory = memory
         self.console = Console()
         self._conv_id: int | None = None
@@ -23,6 +35,7 @@ class LingYaCLI:
     async def run(self) -> None:
         self._print_welcome()
         await self._ensure_conversation()
+        await self._show_opening()
 
         while True:
             try:
@@ -60,8 +73,11 @@ class LingYaCLI:
         ais = [m for m in messages if isinstance(m, AIMessage)]
         response_text = ais[-1].text if ais else ""
 
-        # Bump conversation timestamp
+        # Persist this turn
         if self._conv_id:
+            await self.db.add_turn(self._conv_id, "user", user_input)
+            if response_text:
+                await self.db.add_turn(self._conv_id, "ai", response_text)
             await self.db.update_conversation_timestamp(self._conv_id)
 
         return response_text
@@ -180,10 +196,36 @@ class LingYaCLI:
 
     def _print_welcome(self) -> None:
         self.console.print()
+
+    async def _show_opening(self) -> None:
+        """Generate and display LingYa's opening line for this session."""
+        # Find the most recent conversation that isn't this one
+        sessions = await self.db.list_conversations()
+        prev_session = None
+        for s in sessions:
+            if s["id"] != self._conv_id:
+                prev_session = s
+                break
+
+        transcript = None
+        if prev_session is not None:
+            turns = await self.db.get_turns(prev_session["id"], limit=6)
+            if turns:
+                lines = [f"{'LingYa' if t['role'] == 'ai' else 'User'}: {t['content']}" for t in turns]
+                transcript = "\n".join(lines)
+
+        with self.console.status("[dim]Waking up...[/]"):
+            line = await generate_opening_line(
+                self._model, self._persona_config, transcript
+            )
+        if line is None:
+            return  # Silent fallback
+
         self.console.print(Panel.fit(
-            "Type /help for available commands.",
-            border_style="blue",
-            title="Welcome",
+            line,
+            border_style="magenta",
+            title="LingYa",
+            title_align="left",
         ))
 
     def _show_help(self) -> None:
