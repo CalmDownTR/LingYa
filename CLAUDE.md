@@ -33,32 +33,47 @@ main.py → create_deep_agent()
             ├── model: ChatOpenAI (DeepSeek API)
             ├── tools: [memory_store, memory_search] + MCP tools (optional)
             ├── middleware: [SummarizationToolMiddleware]
-            ├── system_prompt: base agent prompt
-            └── backend: StateBackend (shared instance)
+            ├── system_prompt: build_static_prompt() + per-turn dynamic fragment
+            ├── backend: StateBackend (shared instance)
+            └── checkpointer: AsyncSqliteSaver
+
+main.py → MindEngine (pure computation, zero framework dependency)
+            ├── OCC 22-emotion classification (deterministic)
+            ├── PAD evolution (pleasure-arousal-dominance)
+            ├── IPC state machine (agency/communion)
+            ├── Dynamic tone (continuous PAD→tone + OCEAN modulation)
+            ├── OCEAN drift (every 10 turns, max 0.005/step)
+            └── Reflection tree (importance-threshold triggered)
 ```
 
 ### Request lifecycle
-1. CLI calls `agent.ainvoke({"messages": [user_msg]}, config)` with thread_id
+1. CLI calls `agent.ainvoke({"messages": [SystemMessage(fragment), HumanMessage(msg)]}, config)` with thread_id
 2. LangGraph checkpoint loads conversation state
 3. deepagents middleware pipeline:
    - Built-in: TodoList, Filesystem, SubAgent, Summarization
    - **SummarizationToolMiddleware**: optional `compact_conversation` tool
 4. LLM called with all tools available (MCP)
-5. Tool calls executed, response extracted, state checkpointed
+5. Tool calls executed, response extracted
+6. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
+7. State checkpointed by LangGraph
 
 ### Modules at a glance
 
 | Module | Role | Key detail |
 |--------|------|------------|
-| `main.py` | Assembly | Wires model + tools + middleware + CLI |
-| `lingya/cli.py` | Terminal UI | Rich-based, `/sessions` `/new` `/switch` |
-| `lingya/config.py` | Config | Pydantic + YAML + env overlay, slimmed down |
-| `lingya/persona/` | Persona | Dynamic prompt assembly via mind_core + tone_matrix |
-| `lingya/memory/` | Memory | ChromaDB-backed semantic memory, `store` + `search` + `list_all` + `delete` |
-| `lingya/storage/` | Persistence | SQLite via aiosqlite, 2 tables (conversations, schema_version) |
+| `main.py` | Assembly | Wires model + tools + middleware + MindEngine + CLI |
+| `lingya/cli.py` | Terminal UI | Rich-based, `/sessions` `/new` `/switch` `/memories` `/diary` |
+| `lingya/config.py` | Config | Pydantic + YAML + env overlay |
+| `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection |
+| `lingya/memory/` | Memory | ChromaDB-backed semantic memory, importance-weighted, reflection tree |
+| `lingya/storage/` | Persistence | SQLite via aiosqlite, tables: conversations, turns, mind_state |
+| `lingya/diary.py` | Diary | Markdown diary generation in LingYa's voice, one per day |
+| `lingya/reflection.py` | Opening | Generates context-aware opening line for returning users |
 
 ### Configuration
-- `config.yaml` — runtime settings (safe to commit)
+- `config.yaml` — runtime settings (safe to commit): LLM, db_path, memory_path, data_dir
+- `agent_config.yaml` — mind config: identity, OCEAN traits, tone_matrix, behavior_guardrails
+- `agent_config.example.yaml` — template for new setups
 - `.env` — secrets: `DEEPSEEK_API_KEY`, `LINGYA_API_KEY`
 
 ## 协作流程
