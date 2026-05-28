@@ -129,7 +129,8 @@ class MindEngine:
         )
         self._last_stage = stage.value
         self._current_tone = compute_dynamic_tone(
-            self.state.current_pad, stage, self.config.tone_matrix
+            self.state.current_pad, stage, self.config.tone_matrix,
+            self.state.current_ocean,
         )
 
         # 5. Importance scoring + store
