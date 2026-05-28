@@ -15,7 +15,9 @@ class PADPoint(BaseModel):
 class MindState(BaseModel):
     """Fully serializable runtime state of the mind.
 
-    Persisted to SQLite across CLI restarts for long-term personality evolution.
+    Persisted to SQLite — the sole source of truth for all evolvable
+    personality data after first startup. OCEAN is seeded from YAML on
+    first run; PAD baseline is always derived from current OCEAN.
     """
 
     current_pad: PADPoint = Field(default_factory=PADPoint)
@@ -40,13 +42,17 @@ class MindState(BaseModel):
 
     @classmethod
     def from_config(cls, config: MindConfig) -> MindState:
+        from lingya.mind.affect import ocean_to_pad_baseline
+
+        ocean = config.ocean.model_copy(deep=True)
+        baseline = ocean_to_pad_baseline(ocean)
         return cls(
             current_pad=PADPoint(
-                pleasure=config.pad_baseline.pleasure,
-                arousal=config.pad_baseline.arousal,
-                dominance=config.pad_baseline.dominance,
+                pleasure=baseline.pleasure,
+                arousal=baseline.arousal,
+                dominance=baseline.dominance,
             ),
-            current_ocean=config.ocean.model_copy(deep=True),
+            current_ocean=ocean,
         )
 
     def to_dict(self) -> dict:

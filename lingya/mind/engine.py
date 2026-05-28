@@ -11,7 +11,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from lingya.mind.affect import evolve_pad, occ_ipc_process, ocean_drift
+from lingya.mind.affect import evolve_pad, occ_ipc_process, ocean_drift, ocean_to_pad_baseline
 from lingya.mind.config import MindConfig
 from lingya.mind.dynamics import IPCState, ipc_to_state, next_ipc_state
 from lingya.mind.guard import check_reanchor, generate_reanchor_hint
@@ -83,11 +83,11 @@ class MindEngine:
         # 1. Merged OCC + IPC — single LLM call with 1.5s timeout, neutral fallback
         result = await occ_ipc_process(event, self.state.recent_emotions, self._llm_call)
 
-        # 2. Evolve PAD with OCC pull + spring toward baseline
+        # 2. Evolve PAD with OCC pull + spring toward OCEAN-derived baseline
         self.state.current_pad = evolve_pad(
             self.state.current_pad,
             result.pad_pull,
-            self.config.pad_baseline,
+            ocean_to_pad_baseline(self.state.current_ocean),
         )
         self.state.pad_history.append(
             PADPoint(
@@ -150,12 +150,11 @@ class MindEngine:
             self.state.cumulative_importance = 0.0
             self.state.reflection_threshold *= 1.1
 
-        # 7. OCEAN drift (every 10 turns, pure compute)
+        # 7. OCEAN drift (every 10 turns, pure compute, baseline derived from OCEAN itself)
         if self.state.turn_counter % 10 == 0:
             self.state.current_ocean = ocean_drift(
                 self.state.current_ocean,
                 self.state.pad_history,
-                self.config.pad_baseline,
             )
 
         # 8. Auto-persist

@@ -408,17 +408,22 @@ def evolve_pad(
 def ocean_drift(
     ocean: BigFiveTraits,
     pad_history: list[PADPoint],
-    baseline: PADBaseline,
     epsilon: float = 0.001,
     min_history: int = 20,
+    max_step: float = 0.005,
 ) -> BigFiveTraits:
     """Long-term PAD deviation → tiny OCEAN adjustment.
 
-    Only triggers with sufficient history. Epsilon is small to ensure
-    personality changes are very gradual.
+    PAD baseline is derived from OCEAN itself (closed loop). Drift only
+    triggers with sufficient history. Epsilon and max_step cap ensure
+    personality changes are extremely gradual.
+
+    max_step limits the per-cycle absolute change in each OCEAN dimension.
     """
     if len(pad_history) < min_history:
         return ocean
+
+    baseline = ocean_to_pad_baseline(ocean)
 
     # Average PAD over history
     n = len(pad_history)
@@ -431,12 +436,15 @@ def ocean_drift(
     da = avg_a - baseline.arousal
     dd = avg_d - baseline.dominance
 
-    # Tiny adjustments (approximate inverse of ocean_to_pad_baseline)
-    new_ocean = BigFiveTraits(
-        openness=max(0.0, min(1.0, ocean.openness + epsilon * dp * 0.15)),
-        conscientiousness=max(0.0, min(1.0, ocean.conscientiousness + epsilon * dd * 0.18)),
-        extraversion=max(0.0, min(1.0, ocean.extraversion + epsilon * (dp * 0.21 + dd * 0.27))),
-        agreeableness=max(0.0, min(1.0, ocean.agreeableness + epsilon * dp * 0.27)),
-        neuroticism=max(0.0, min(1.0, ocean.neuroticism + epsilon * da * 0.29)),
+    # Tiny adjustments with step cap
+    def step(current: float, delta: float) -> float:
+        clamped_delta = max(-max_step, min(max_step, delta))
+        return max(0.0, min(1.0, current + clamped_delta))
+
+    return BigFiveTraits(
+        openness=step(ocean.openness, epsilon * dp * 0.15),
+        conscientiousness=step(ocean.conscientiousness, epsilon * dd * 0.18),
+        extraversion=step(ocean.extraversion, epsilon * (dp * 0.21 + dd * 0.27)),
+        agreeableness=step(ocean.agreeableness, epsilon * dp * 0.27),
+        neuroticism=step(ocean.neuroticism, epsilon * da * 0.29),
     )
-    return new_ocean

@@ -16,9 +16,6 @@ class TestMindConfig:
         assert config.ocean.extraversion == 0.15
         assert config.ocean.agreeableness == 0.20
         assert config.ocean.neuroticism == 0.35
-        assert config.pad_baseline.pleasure == -0.1
-        assert config.pad_baseline.arousal == 0.3
-        assert config.pad_baseline.dominance == 0.6
         assert config.tone_matrix.warmth == 15
         assert config.tone_matrix.formality == 85
         assert config.tone_matrix.humor == 0.05
@@ -26,11 +23,13 @@ class TestMindConfig:
 
     def test_mind_state_from_config(self, mind_config):
         from lingya.mind import MindState
+        from lingya.mind.affect import ocean_to_pad_baseline
 
         state = MindState.from_config(mind_config)
-        assert state.current_pad.pleasure == mind_config.pad_baseline.pleasure
-        assert state.current_pad.arousal == mind_config.pad_baseline.arousal
-        assert state.current_pad.dominance == mind_config.pad_baseline.dominance
+        baseline = ocean_to_pad_baseline(mind_config.ocean)
+        assert state.current_pad.pleasure == baseline.pleasure
+        assert state.current_pad.arousal == baseline.arousal
+        assert state.current_pad.dominance == baseline.dominance
         assert state.current_ocean.openness == mind_config.ocean.openness
         assert state.turn_counter == 0
         assert state.cumulative_importance == 0.0

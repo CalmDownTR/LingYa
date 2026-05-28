@@ -196,27 +196,25 @@ class TestPADEvolution:
 
     def test_ocean_drift_no_effect_with_short_history(self):
         from lingya.mind.affect import ocean_drift
-        from lingya.mind.config import BigFiveTraits, PADBaseline
+        from lingya.mind.config import BigFiveTraits
 
         ocean = BigFiveTraits()
-        baseline = PADBaseline()
         pad_history = []  # Not enough history
 
-        result = ocean_drift(ocean, pad_history, baseline)
+        result = ocean_drift(ocean, pad_history)
         assert result.openness == ocean.openness  # Unchanged
 
     def test_ocean_drift_with_sufficient_history(self):
         from lingya.mind.affect import ocean_drift
-        from lingya.mind.config import BigFiveTraits, PADBaseline
+        from lingya.mind.config import BigFiveTraits
         from lingya.mind.state import PADPoint
 
-        ocean = BigFiveTraits()
-        baseline = PADBaseline(pleasure=0.5, arousal=0.0, dominance=0.0)
-        # PAD history consistently below baseline → should drift down
+        ocean = BigFiveTraits(openness=0.3)
+        # PAD history consistently below OCEAN-derived baseline → slight drift
         pad_history = [PADPoint(pleasure=-0.5, arousal=0.0, dominance=0.0) for _ in range(25)]
 
-        result = ocean_drift(ocean, pad_history, baseline)
-        # Very small changes due to tiny epsilon
+        result = ocean_drift(ocean, pad_history)
+        # Very small changes due to tiny epsilon and max_step cap
         assert abs(result.openness - ocean.openness) < 0.01
 
 

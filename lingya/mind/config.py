@@ -42,12 +42,16 @@ class IdentityAnchor(BaseModel):
 
 
 class MindConfig(BaseModel):
-    """Complete mind configuration. Replaces the old PersonaConfig."""
+    """Complete mind configuration.
+
+    ocean is the seed for first-startup personality. After first run, OCEAN
+    lives in DB as the sole source of truth. pad_baseline is never stored —
+    it is always derived from current OCEAN via ocean_to_pad_baseline().
+    """
     version: str
     meta: PersonaMeta
     identity: IdentityAnchor
     ocean: BigFiveTraits
-    pad_baseline: PADBaseline
     tone_matrix: ToneMatrix
     behavior_guardrails: list[str]
 
@@ -66,7 +70,7 @@ def load_mind_config(path: str | Path = "agent_config.yaml") -> MindConfig:
         else:
             print(
                 f"\n  Mind config not found: {config_path}\n"
-                f"  Create it with identity, ocean, pad_baseline, tone_matrix, "
+                f"  Create it with identity, ocean, tone_matrix, "
                 f"and behavior_guardrails fields.\n"
                 f"  See documentation for details.\n"
             )
@@ -94,10 +98,6 @@ def load_mind_config(path: str | Path = "agent_config.yaml") -> MindConfig:
             "      extraversion: 0.5\n"
             "      agreeableness: 0.5\n"
             "      neuroticism: 0.5\n"
-            "    pad_baseline:\n"
-            "      pleasure: 0.0\n"
-            "      arousal: 0.0\n"
-            "      dominance: 0.0\n"
             "    tone_matrix:\n"
             "      warmth: 50\n"
             "      formality: 50\n"

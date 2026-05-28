@@ -37,6 +37,7 @@ def mock_memory():
 class TestMindEngine:
     async def test_engine_creation(self, mind_config):
         from lingya.mind import MindEngine
+        from lingya.mind.affect import ocean_to_pad_baseline
 
         async def noop_llm(prompt: str) -> str:
             return "ok"
@@ -46,8 +47,9 @@ class TestMindEngine:
             memory_store=MagicMock(),
             llm_call=noop_llm,
         )
+        baseline = ocean_to_pad_baseline(mind_config.ocean)
         assert engine.state.turn_counter == 0
-        assert engine.state.current_pad.pleasure == mind_config.pad_baseline.pleasure
+        assert engine.state.current_pad.pleasure == baseline.pleasure
 
     async def test_process_event_increments_turn_counter(self, mind_config, mock_llm, mock_memory):
         from lingya.mind import MindEngine
