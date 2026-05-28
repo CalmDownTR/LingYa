@@ -15,6 +15,23 @@ MIGRATIONS: list[str] = [
         content TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );""",
+    # v4–v6: tables from earlier iterations (kept for migration version alignment)
+    """CREATE TABLE IF NOT EXISTS personality (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        data JSON NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );""",
+    """CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );""",
+    """CREATE TABLE IF NOT EXISTS reflection_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        old_personality JSON,
+        new_personality JSON NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );""",
     """CREATE TABLE IF NOT EXISTS mind_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         state_json TEXT NOT NULL,
