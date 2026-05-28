@@ -6,6 +6,34 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 
+# ── Rule-based importance pre-scoring ───────────────────────────────────
+
+_IDENTITY_KEYWORDS = [
+    "我是", "我喜欢", "我讨厌", "我的名字", "我住", "我工作",
+    "我害怕", "我想", "我希望", "我决定", "我不再", "我改名",
+    "我从小", "我父母", "我的梦想", "我放弃",
+]
+
+
+def rule_based_importance(text: str) -> float:
+    """Fast rule-based importance pre-score (1-10).
+
+    Used immediately for memory storage; LLM refines the score asynchronously.
+    """
+    score = 5.0
+    if len(text) > 200:
+        score += 1.0
+    if len(text) > 500:
+        score += 1.0
+    for kw in _IDENTITY_KEYWORDS:
+        if kw in text:
+            score += 0.5
+    return max(1.0, min(10.0, score))
+
+
+# ── MemoryStore ────────────────────────────────────────────────────────
+
+
 class MemoryStore:
     """ChromaDB-backed semantic memory for user facts and preferences."""
 
@@ -179,6 +207,11 @@ class EnhancedMemoryStore(MemoryStore):
 
         items.sort(key=lambda x: x["weighted_score"], reverse=True)
         return items[:top_k]
+
+    def update_importance(self, entry_id: str, importance: float) -> None:
+        """Update the importance metadata for an existing memory entry."""
+        col = self.collection
+        col.update(ids=[entry_id], metadatas=[{"importance": importance}])
 
     def get_cumulative_importance(self) -> float:
         """Sum importance of all stored memories."""

@@ -9,12 +9,10 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def mock_llm():
-    """Mock LLM that returns simple JSON responses for cognitive appraisal."""
+    """Mock LLM that returns merged OCC+IPC JSON."""
     async def call(prompt: str) -> str:
-        if "w_goal" in prompt and "p_expected" in prompt:
-            return '{"w_goal": 0.5, "p_expected": 0.3}'
-        if "agency" in prompt:
-            return '{"agency": 0.6, "communion": 0.5}'
+        if "w_goal" in prompt and "agency" in prompt:
+            return '{"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
         if "importance" in prompt:
             return "7.0"
         return "ok"
@@ -27,6 +25,7 @@ def mock_memory():
     m = MagicMock()
     m.store_with_importance = MagicMock(return_value="mem_test")
     m.score_importance = AsyncMock(return_value=5.0)
+    m.update_importance = MagicMock()
     m.search_weighted = MagicMock(return_value=[])
     m.get_cumulative_importance = MagicMock(return_value=0.0)
     m.store = MagicMock(return_value="mem_test")

@@ -1,11 +1,13 @@
 """OCC 22-emotion decision tree + PAD/OCEAN evolution.
 
 Deterministic, rule-based emotion classification. No LLM for emotion labels.
-LLM is only used for cognitive appraisal (w_goal, p_expected estimation).
+LLM is only used for cognitive appraisal (w_goal, p_expected estimation)
+and merged OCC+IPC (w_goal, p_expected, agency, communion) in a single call.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -218,6 +220,106 @@ async def occ_process(
         pad_pull=pad_pull,
         w_goal=w_goal,
         p_expected=p_expected,
+    )
+
+
+# ── Merged OCC + IPC (single LLM call) ──────────────────────────────────
+
+
+@dataclass
+class OCCIPCResult:
+    emotion: str
+    intensity: float
+    pad_pull: PADPoint
+    w_goal: float
+    p_expected: float
+    agency: float
+    communion: float
+
+
+OCC_IPC_MERGED_PROMPT = """\
+Analyze this event from a conversation and return four numbers:
+
+Event: {event_description}
+
+Recent emotional context:
+{emotion_context}
+
+1. w_goal (0-1): How relevant is this event to the agent's goals and concerns?
+   0 = completely irrelevant, 1 = critically important
+2. p_expected (0-1): How expected was this event from the agent's perspective?
+   0 = completely surprising, 1 = fully expected
+3. agency (0-1): How much should the agent lead, direct, or assert in response?
+   0 = completely passive/following, 1 = highly directive/assertive
+4. communion (0-1): How much should the agent connect, empathize, or build rapport?
+   0 = cold/distant/formal, 1 = warm/intimate/connected
+
+Return ONLY a JSON object: {{"w_goal": <float>, "p_expected": <float>, "agency": <float>, "communion": <float>}}"""
+
+
+_OCC_IPC_TIMEOUT = 1.5  # seconds
+
+
+async def occ_ipc_process(
+    event: dict[str, Any],
+    recent_emotions: list[dict],
+    llm_call: Callable[[str], Awaitable[str]],
+) -> OCCIPCResult:
+    """Single LLM call for cognitive appraisal + IPC estimation.
+
+    Merges what were previously two serial LLM calls into one.
+    Returns OCC results (emotion, intensity, pad_pull) plus IPC axes (agency, communion).
+    Falls back to neutral values on timeout or parse error.
+    """
+    import json
+
+    description = event.get("description", str(event))
+    emotion_context = (
+        "\n".join(
+            f"Turn {e.get('turn', '?')}: {e.get('emotion', 'neutral')} (intensity={e.get('intensity', 0.5):.2f})"
+            for e in recent_emotions[-6:]
+        )
+        if recent_emotions
+        else "No recent emotional context."
+    )
+
+    prompt = OCC_IPC_MERGED_PROMPT.format(
+        event_description=description,
+        emotion_context=emotion_context,
+    )
+
+    try:
+        response = await asyncio.wait_for(llm_call(prompt), timeout=_OCC_IPC_TIMEOUT)
+        response = response.strip()
+        if response.startswith("```"):
+            response = response.split("\n", 1)[1]
+            if response.endswith("```"):
+                response = response[:-3]
+        data = json.loads(response)
+        w_goal = max(0.0, min(1.0, float(data.get("w_goal", 0.5))))
+        p_expected = max(0.0, min(1.0, float(data.get("p_expected", 0.5))))
+        agency = max(0.0, min(1.0, float(data.get("agency", 0.5))))
+        communion = max(0.0, min(1.0, float(data.get("communion", 0.5))))
+    except Exception:
+        w_goal, p_expected = 0.3, 0.5
+        agency, communion = 0.5, 0.5
+
+    emotion = occ_classify(event)
+    intensity = compute_intensity(w_goal, p_expected)
+    pull = OCC_EMOTIONS.get(emotion, OCC_EMOTIONS["neutral"])
+    pad_pull = PADPoint(
+        pleasure=pull[0] * intensity,
+        arousal=pull[1] * intensity,
+        dominance=pull[2] * intensity,
+    )
+    return OCCIPCResult(
+        emotion=emotion,
+        intensity=intensity,
+        pad_pull=pad_pull,
+        w_goal=w_goal,
+        p_expected=p_expected,
+        agency=agency,
+        communion=communion,
     )
 
 

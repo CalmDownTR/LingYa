@@ -11,12 +11,13 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from lingya.mind.affect import evolve_pad, occ_process, ocean_drift
+from lingya.mind.affect import evolve_pad, occ_ipc_process, ocean_drift
 from lingya.mind.config import MindConfig
-from lingya.mind.dynamics import estimate_ipc, ipc_to_state, next_ipc_state
+from lingya.mind.dynamics import IPCState, ipc_to_state, next_ipc_state
 from lingya.mind.guard import check_reanchor, generate_reanchor_hint
 from lingya.mind.state import MindState, PADPoint
 from lingya.mind.tone import compute_dynamic_tone, detect_stage
+from lingya.memory.store import rule_based_importance
 
 # ── Static base prompt skeleton (replaces old PromptAssembler output) ───
 
@@ -76,16 +77,16 @@ class MindEngine:
     # ── Public API ──────────────────────────────────────────────────
 
     async def process_event(self, event: dict[str, Any]) -> None:
-        """Full pipeline: OCC → PAD → IPC → tone → importance → reflection → drift → save."""
+        """Pipeline: OCC+IPC (1 LLM) → PAD → tone → importance (bg) → reflection → drift → save."""
         self.state.turn_counter += 1
 
-        # 1. OCC process: cognitive appraisal + classify + intensity + PAD pull
-        occ_result = await occ_process(event, self._llm_call)
+        # 1. Merged OCC + IPC — single LLM call with 1.5s timeout, neutral fallback
+        result = await occ_ipc_process(event, self.state.recent_emotions, self._llm_call)
 
         # 2. Evolve PAD with OCC pull + spring toward baseline
         self.state.current_pad = evolve_pad(
             self.state.current_pad,
-            occ_result.pad_pull,
+            result.pad_pull,
             self.config.pad_baseline,
         )
         self.state.pad_history.append(
@@ -95,33 +96,27 @@ class MindEngine:
                 dominance=self.state.current_pad.dominance,
             )
         )
-        # Keep history bounded
         if len(self.state.pad_history) > 200:
             self.state.pad_history = self.state.pad_history[-100:]
 
         # Record emotion
         self.state.recent_emotions.append({
-            "emotion": occ_result.emotion,
-            "intensity": occ_result.intensity,
+            "emotion": result.emotion,
+            "intensity": result.intensity,
             "turn": self.state.turn_counter,
         })
         if len(self.state.recent_emotions) > 20:
             self.state.recent_emotions = self.state.recent_emotions[-20:]
 
-        # 3. IPC estimation + state transition
-        # Build turn context from recent emotions (simplified — real impl uses conversation text)
-        agency, communion = await estimate_ipc(
-            self.state.recent_emotions, self._llm_call
-        )
-        target_state = ipc_to_state(agency, communion)
-        from lingya.mind.dynamics import IPCState
+        # 3. IPC state transition (agency/communion from merged result)
+        target_state = ipc_to_state(result.agency, result.communion)
         current_ipc = IPCState(self.state.ipc_state)
         new_ipc = next_ipc_state(current_ipc, target_state)
-        self.state.ipc_agency = agency
-        self.state.ipc_communion = communion
+        self.state.ipc_agency = result.agency
+        self.state.ipc_communion = result.communion
         self.state.ipc_state = new_ipc.value
 
-        # 4. Stage detection + dynamic tone
+        # 4. Stage detection + dynamic tone (pure compute, no LLM)
         stage = detect_stage(
             self.state.turn_counter,
             self.state.current_pad,
@@ -133,11 +128,12 @@ class MindEngine:
             self.state.current_ocean,
         )
 
-        # 5. Importance scoring + store
+        # 5. Importance scoring — rule-based pre-score now, LLM refinement in background
         description = event.get("description", event.get("content", str(event)))
-        importance = await self.memory.score_importance(description, self._llm_call)
-        self.memory.store_with_importance(description, importance)
-        self.state.cumulative_importance += importance
+        pre_score = rule_based_importance(description)
+        entry_id = self.memory.store_with_importance(description, pre_score)
+        self.state.cumulative_importance += pre_score
+        asyncio.create_task(self._deferred_importance_score(description, entry_id))
 
         # 6. Reflection check (fire-and-forget)
         if self.state.cumulative_importance >= self.state.reflection_threshold:
@@ -152,9 +148,9 @@ class MindEngine:
                 )
             )
             self.state.cumulative_importance = 0.0
-            self.state.reflection_threshold *= 1.1  # Slowly increase threshold
+            self.state.reflection_threshold *= 1.1
 
-        # 7. OCEAN drift (every 10 turns)
+        # 7. OCEAN drift (every 10 turns, pure compute)
         if self.state.turn_counter % 10 == 0:
             self.state.current_ocean = ocean_drift(
                 self.state.current_ocean,
@@ -165,6 +161,14 @@ class MindEngine:
         # 8. Auto-persist
         if self._db is not None:
             await self.save_state(self._db)
+
+    async def _deferred_importance_score(self, text: str, entry_id: str) -> None:
+        """Background: score importance with LLM and update stored metadata."""
+        try:
+            score = await self.memory.score_importance(text, self._llm_call)
+            self.memory.update_importance(entry_id, score)
+        except Exception:
+            pass  # Rule-based pre-score is sufficient
 
     def get_tone_params(self) -> dict[str, float]:
         """Return current dynamic tone parameters for prompt injection."""
