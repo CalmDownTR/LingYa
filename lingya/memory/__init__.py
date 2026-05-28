@@ -1,3 +1,3 @@
-from lingya.memory.store import MemoryStore
+from lingya.memory.store import EnhancedMemoryStore, MemoryStore
 
-__all__ = ["MemoryStore"]
+__all__ = ["EnhancedMemoryStore", "MemoryStore"]

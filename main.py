@@ -23,7 +23,7 @@ from langchain_core.tools import tool
 
 from lingya.config import load_config
 from lingya.cli import LingYaCLI
-from lingya.memory import MemoryStore
+from lingya.memory import EnhancedMemoryStore
 from lingya.storage.db import Database
 
 
@@ -46,7 +46,7 @@ async def main() -> None:
     await db.initialize()
 
     # ── Memory ──
-    memory = MemoryStore(persist_path=config.memory_path)
+    memory = EnhancedMemoryStore(persist_path=config.memory_path)
     memory.warmup()  # download the embedding model before entering the chat loop
 
     @tool
@@ -79,6 +79,13 @@ async def main() -> None:
             lines.append(f"[{r['id']}] {r['text']}")
         return "\n".join(lines)
 
+    # ── LLM call wrapper for MindEngine ──
+    async def llm_call(prompt: str) -> str:
+        """Simple LLM call for MindEngine's cognitive appraisal, IPC, etc."""
+        from langchain_core.messages import HumanMessage
+        result = await model.ainvoke([HumanMessage(content=prompt)])
+        return str(result.content) if hasattr(result, "content") else str(result)
+
     # ── Checkpointer (persists conversation state across restarts) ──
     async with AsyncSqliteSaver.from_conn_string(config.db_path) as checkpointer:
         await checkpointer.setup()
@@ -94,12 +101,19 @@ async def main() -> None:
         except Exception:
             pass
 
-        # ── Persona ──
-        from lingya.persona import PromptAssembler, load_persona_config
+        # ── Mind Engine ──
+        from lingya.mind import MindEngine, load_mind_config, build_static_prompt
 
-        persona_config = load_persona_config(config.persona_config_path)
-        assembler = PromptAssembler(persona_config)
-        system_prompt = assembler.assemble()
+        mind_config = load_mind_config(config.persona_config_path)
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=memory,
+            llm_call=llm_call,
+        )
+        engine.set_db(db)
+        await engine.load_state(db)  # Restore from SQLite if available
+
+        system_prompt = build_static_prompt(mind_config)
 
         # ── Agent ──
         backend = StateBackend()
@@ -117,7 +131,7 @@ async def main() -> None:
 
         # ── CLI ──
         cli = LingYaCLI(
-            agent, db, model, persona_config, memory,
+            agent, db, model, engine, memory,
             data_dir=config.data_dir,
             diary_period_days=config.diary_period_days,
         )

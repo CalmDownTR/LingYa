@@ -122,3 +122,25 @@ class Database:
         )
         return [dict(row) for row in await cur.fetchall()]
 
+    # -- Mind State --
+
+    async def upsert_mind_state(self, state_json: str) -> None:
+        """INSERT or REPLACE the singleton mind state row."""
+        await self.conn.execute(
+            """INSERT INTO mind_state (id, state_json, updated_at)
+               VALUES (1, ?, datetime('now'))
+               ON CONFLICT(id) DO UPDATE SET
+               state_json = excluded.state_json,
+               updated_at = excluded.updated_at""",
+            (state_json,),
+        )
+        await self.conn.commit()
+
+    async def get_mind_state(self) -> str | None:
+        """Return state_json or None if no saved state."""
+        cur = await self.conn.execute(
+            "SELECT state_json FROM mind_state WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        return row["state_json"] if row else None
+

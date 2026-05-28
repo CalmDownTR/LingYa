@@ -13,7 +13,7 @@ from pathlib import Path
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
-from lingya.persona.config import PersonaConfig
+from lingya.mind.config import MindConfig
 
 DIARY_PROMPT = """\
 你是 LingYa。{identity}。{core_belief}。
@@ -151,13 +151,13 @@ def format_transcript(turns: list[dict]) -> str:
 
 async def generate_diary(
     model: BaseChatModel,
-    persona_config: PersonaConfig,
+    mind_config: MindConfig,
     transcript: str,
 ) -> str:
     """Generate a diary entry using the LLM in LingYa's persona voice."""
-    identity = persona_config.mind_core.identity
-    core_belief = persona_config.mind_core.core_belief
-    warmth = persona_config.tone_matrix.warmth
+    identity = mind_config.identity.identity
+    core_belief = mind_config.identity.core_belief
+    warmth = mind_config.tone_matrix.warmth
 
     if warmth < 40:
         style_hint = "你偏冷峻理性，措辞节制，不用感叹号，不用情绪化词语"

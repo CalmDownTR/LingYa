@@ -41,14 +41,14 @@ def mock_db():
 
 
 @pytest.fixture(scope="module")
-def persona_config():
-    from lingya.persona import load_persona_config
+def mind_config():
+    from lingya.mind import load_mind_config
 
-    return load_persona_config("agent_config.yaml")
+    return load_mind_config("agent_config.yaml")
 
 
 @pytest.fixture(scope="module")
-def assembler(persona_config):
-    from lingya.persona import PromptAssembler
+def mind_state(mind_config):
+    from lingya.mind import MindState
 
-    return PromptAssembler(persona_config)
+    return MindState.from_config(mind_config)

@@ -12,15 +12,18 @@ from lingya.mind.config import (
     ToneMatrix,
     load_mind_config,
 )
+from lingya.mind.engine import MindEngine, build_static_prompt
 from lingya.mind.state import MindState, PADPoint
 
 __all__ = [
     "BigFiveTraits",
     "IdentityAnchor",
     "MindConfig",
+    "MindEngine",
     "MindState",
     "PADBaseline",
     "PADPoint",
     "ToneMatrix",
+    "build_static_prompt",
     "load_mind_config",
 ]

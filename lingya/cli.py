@@ -3,13 +3,12 @@ from __future__ import annotations
 import readline  # noqa: F401 — fix CJK backspace in input()
 from datetime import date, datetime, timezone
 
-from langchain.messages import AIMessage, HumanMessage
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from lingya.persona.config import PersonaConfig
 from lingya.reflection import generate_opening_line
 from lingya.storage.db import Database
 
@@ -20,7 +19,7 @@ class LingYaCLI:
         agent,
         db: Database,
         model: BaseChatModel,
-        persona_config: PersonaConfig,
+        engine,  # MindEngine
         memory=None,
         data_dir: str = "./data",
         diary_period_days: int = 1,
@@ -28,7 +27,7 @@ class LingYaCLI:
         self.agent = agent
         self.db = db
         self._model = model
-        self._persona_config = persona_config
+        self._engine = engine
         self.memory = memory
         self._data_dir = data_dir
         self._diary_period_days = diary_period_days
@@ -71,15 +70,32 @@ class LingYaCLI:
                 ))
 
     async def _invoke_agent(self, user_input: str) -> str:
+        # Prepend dynamic tone/mood fragment as SystemMessage
+        fragment = self._engine.get_prompt_fragment()
+        messages: list = [HumanMessage(content=user_input)]
+        if fragment:
+            messages.insert(0, SystemMessage(content=fragment))
+
         result = await self.agent.ainvoke(
-            {"messages": [HumanMessage(content=user_input)]},
+            {"messages": messages},
             {"configurable": {"thread_id": self._thread_id}},
         )
 
         # Extract the last AI response, skipping tool results
-        messages = result.get("messages", [])
-        ais = [m for m in messages if isinstance(m, AIMessage)]
+        msgs = result.get("messages", [])
+        ais = [m for m in msgs if isinstance(m, AIMessage)]
         response_text = ais[-1].text if ais else ""
+
+        # MindEngine: process user event + check response alignment
+        await self._engine.process_event({
+            "event_type": "outcome",
+            "valence": "neutral",
+            "focus": "self",
+            "description": user_input,
+            "content": user_input,
+        })
+        if response_text:
+            await self._engine.check_response_alignment(response_text)
 
         # Persist this turn
         if self._conv_id:
@@ -283,7 +299,7 @@ class LingYaCLI:
         with self.console.status("[dim]Writing in diary...[/]"):
             try:
                 content = await generate_diary(
-                    self._model, self._persona_config, transcript
+                    self._model, self._engine.config, transcript
                 )
             except Exception:
                 return False
@@ -316,7 +332,7 @@ class LingYaCLI:
 
         with self.console.status("[dim]Waking up...[/]"):
             line = await generate_opening_line(
-                self._model, self._persona_config, transcript
+                self._model, self._engine.config, transcript
             )
         if line is None:
             return  # Silent fallback

@@ -3,7 +3,7 @@ from __future__ import annotations
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
-from lingya.persona.config import PersonaConfig
+from lingya.mind.config import MindConfig
 
 FIRST_TIME_PROMPT = """\
 你是 LingYa。{identity}。{core_belief}。
@@ -25,22 +25,22 @@ RETURNING_PROMPT = """\
 
 async def generate_opening_line(
     model: BaseChatModel,
-    persona_config: PersonaConfig,
+    mind_config: MindConfig,
     transcript: str | None = None,
 ) -> str | None:
     """Generate a one-sentence opening line for LingYa.
 
     Args:
         model: The LLM to use for generation.
-        persona_config: LingYa's persona configuration.
+        mind_config: LingYa's mind configuration.
         transcript: Formatted conversation transcript from a previous session,
             or None for first-time users.
 
     Returns:
         A one-sentence opening line, or None if generation fails.
     """
-    identity = persona_config.mind_core.identity
-    core_belief = persona_config.mind_core.core_belief
+    identity = mind_config.identity.identity
+    core_belief = mind_config.identity.core_belief
 
     if transcript is None:
         prompt = FIRST_TIME_PROMPT.format(identity=identity, core_belief=core_belief)

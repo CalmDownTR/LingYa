@@ -24,37 +24,37 @@ class TestGenerateOpeningLine:
         m.ainvoke = AsyncMock(side_effect=RuntimeError("API error"))
         return m
 
-    async def test_first_time_returns_introduction(self, model, persona_config):
+    async def test_first_time_returns_introduction(self, model, mind_config):
         from lingya.reflection import generate_opening_line
 
-        result = await generate_opening_line(model, persona_config, transcript=None)
+        result = await generate_opening_line(model, mind_config, transcript=None)
         assert result == "你好，我是 LingYa。"
 
-    async def test_returning_user_has_transcript_in_prompt(self, model, persona_config):
+    async def test_returning_user_has_transcript_in_prompt(self, model, mind_config):
         from lingya.reflection import generate_opening_line
 
         transcript = "User: 你好\nLingYa: 你好，有什么可以帮你的？"
-        result = await generate_opening_line(model, persona_config, transcript=transcript)
+        result = await generate_opening_line(model, mind_config, transcript=transcript)
         assert result == "你好，我是 LingYa。"
         # Verify the prompt contained the transcript
         call_arg = model.ainvoke.call_args[0][0]
         prompt_text = call_arg[0].content if hasattr(call_arg[0], "content") else str(call_arg[0])
         assert "你好" in prompt_text
 
-    async def test_model_error_returns_none(self, failing_model, persona_config):
+    async def test_model_error_returns_none(self, failing_model, mind_config):
         from lingya.reflection import generate_opening_line
 
         result = await generate_opening_line(
-            failing_model, persona_config, transcript=None
+            failing_model, mind_config, transcript=None
         )
         assert result is None
 
-    async def test_empty_model_response_returns_none(self, persona_config):
+    async def test_empty_model_response_returns_none(self, mind_config):
         from lingya.reflection import generate_opening_line
 
         model = MagicMock()
         model.ainvoke = AsyncMock(return_value=AIMessage(content=""))
-        result = await generate_opening_line(model, persona_config, transcript=None)
+        result = await generate_opening_line(model, mind_config, transcript=None)
         assert result is None
 
 

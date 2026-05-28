@@ -178,27 +178,27 @@ class TestDiaryGeneration:
         assert "User: hello" in result
         assert "LingYa: hi" in result
 
-    async def test_generate_diary_returns_content(self, model, persona_config):
+    async def test_generate_diary_returns_content(self, model, mind_config):
         from lingya.diary import generate_diary
 
         transcript = "User: 你好\nLingYa: 你好"
-        result = await generate_diary(model, persona_config, transcript)
+        result = await generate_diary(model, mind_config, transcript)
         assert result == "一篇日记内容。"
 
-    async def test_generate_diary_includes_persona_in_prompt(self, model, persona_config):
+    async def test_generate_diary_includes_persona_in_prompt(self, model, mind_config):
         from lingya.diary import generate_diary
 
         transcript = "User: 你好\nLingYa: 你好"
-        await generate_diary(model, persona_config, transcript)
+        await generate_diary(model, mind_config, transcript)
 
         call_arg = model.ainvoke.call_args[0][0]
         prompt_text = call_arg[0].content if hasattr(call_arg[0], "content") else str(call_arg[0])
-        assert persona_config.mind_core.identity in prompt_text
-        assert persona_config.mind_core.core_belief in prompt_text
+        assert mind_config.identity.identity in prompt_text
+        assert mind_config.identity.core_belief in prompt_text
         assert transcript in prompt_text
 
-    async def test_generate_diary_model_error_raises(self, failing_model, persona_config):
+    async def test_generate_diary_model_error_raises(self, failing_model, mind_config):
         from lingya.diary import generate_diary
 
         with pytest.raises(RuntimeError, match="API error"):
-            await generate_diary(failing_model, persona_config, "transcript")
+            await generate_diary(failing_model, mind_config, "transcript")
