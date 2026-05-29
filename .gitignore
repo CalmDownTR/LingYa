@@ -18,8 +18,10 @@ wheels/
 .workbuddy/
 product/
 
-# Claude Code
+# Claude Code (dev tools, not deployment)
 .claude/*
+.agents/
+skills-lock.json
 !.claude/specs/
 
 # CodeGraph (machine-specific index)
