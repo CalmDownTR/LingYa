@@ -27,6 +27,9 @@ skills-lock.json
 # CodeGraph (machine-specific index)
 .codegraph/
 
+# deepeval telemetry cache
+.deepeval/
+
 # Claude Code MCP config
 .mcp.json
 

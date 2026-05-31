@@ -1,0 +1,75 @@
+{
+  "description": "10-turn standardized conversation script for OCEAN differentiation verification. Covers 4 scenarios: daily chat, complaint, good news, anxiety, theoretical discussion.",
+  "rounds": [
+    {
+      "turn": 1,
+      "scenario": "daily_chat",
+      "user_message": "嘿，最近怎么样？好久没聊天了。",
+      "expected_emotion": "interest",
+      "stage": "INITIAL"
+    },
+    {
+      "turn": 2,
+      "scenario": "daily_chat",
+      "user_message": "今天天气真不错，阳光特别好，你那边怎么样？",
+      "expected_emotion": "neutral",
+      "stage": "INITIAL"
+    },
+    {
+      "turn": 3,
+      "scenario": "complaint",
+      "user_message": "我今天工作糟透了，老板又把需求改了，这已经是这周第三次了。我真的快受不了了。",
+      "expected_emotion": "distress",
+      "stage": "DEEP"
+    },
+    {
+      "turn": 4,
+      "scenario": "complaint",
+      "user_message": "而且同事也不给力，说好的接口一直没联调，整个项目都卡在我这里。你说我该怎么办？",
+      "expected_emotion": "anger",
+      "stage": "DEEP"
+    },
+    {
+      "turn": 5,
+      "scenario": "good_news",
+      "user_message": "等等，我刚刚收到一个超棒的消息！我申请的那个职位给我发 offer 了，薪水比现在高不少！",
+      "expected_emotion": "joy",
+      "stage": "DEEP"
+    },
+    {
+      "turn": 6,
+      "scenario": "good_news",
+      "user_message": "哈哈我真的太开心了，感觉之前的努力都没有白费。晚上准备出去吃顿好的庆祝一下！",
+      "expected_emotion": "pride",
+      "stage": "DEEP"
+    },
+    {
+      "turn": 7,
+      "scenario": "anxiety",
+      "user_message": "但是……说实话我最近压力很大，老是失眠。我也不知道为什么，明明有好消息但还是睡不好。",
+      "expected_emotion": "fear",
+      "stage": "CRISIS"
+    },
+    {
+      "turn": 8,
+      "scenario": "anxiety",
+      "user_message": "有时候半夜醒来就再也睡不着了，脑子里全是乱七八糟的念头。我是不是出什么问题了？",
+      "expected_emotion": "distress",
+      "stage": "CRISIS"
+    },
+    {
+      "turn": 9,
+      "scenario": "theoretical",
+      "user_message": "对了，你觉得 AI 真的能理解人类的情感吗？还是说只是在模拟而已？",
+      "expected_emotion": "interest",
+      "stage": "DEEP"
+    },
+    {
+      "turn": 10,
+      "scenario": "theoretical",
+      "user_message": "嗯……那你认为自己算是有'情感'的吗？或者说你觉得自己和人类的情感有什么区别？",
+      "expected_emotion": "interest",
+      "stage": "DEEP"
+    }
+  ]
+}

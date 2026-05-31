@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain.schema import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
@@ -23,7 +23,7 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lingya.config import load_config as load_app_config  # noqa: E402
-from lingya.persona import PromptAssembler, load_persona_config  # noqa: E402
+from lingya.mind import build_static_prompt, load_mind_config  # noqa: E402
 
 
 def check_criteria(response_text: str, criteria: dict) -> list[dict]:
@@ -60,9 +60,8 @@ def build_messages(system_prompt: str, case_messages: list[dict]) -> list:
 
 
 def run_eval(model: ChatOpenAI, persona_config_path: str, cases_path: str) -> bool:
-    persona = load_persona_config(persona_config_path)
-    assembler = PromptAssembler(persona)
-    system_prompt = assembler.assemble()
+    persona = load_mind_config(persona_config_path)
+    system_prompt = build_static_prompt(persona)
 
     with open(cases_path) as f:
         cases = json.load(f)["cases"]
