@@ -18,6 +18,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from lingya.config import Config
+from lingya.gateway.router import MessageRouter
+from lingya.gateway.server import GatewayServer
 from lingya.memory import EnhancedMemoryStore
 from lingya.mind import MindEngine, build_static_prompt
 from lingya.mind.config import MindConfig
@@ -38,16 +40,19 @@ class GatewayDaemon:
         config: Config,
         mind_config: MindConfig,
         pid_file: str = "/tmp/lingya.pid",
+        port: int = 8765,
     ) -> None:
         """Store configs; engine and infrastructure are created in start()."""
         self.config = config
         self.mind_config = mind_config
         self.pid_file = pid_file
+        self.port = port
         self._shutdown_event = asyncio.Event()
         self._engine: MindEngine | None = None
         self._db: Database | None = None
         self._model: ChatOpenAI | None = None
         self._memory: EnhancedMemoryStore | None = None
+        self._ws_server: GatewayServer | None = None
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -70,12 +75,26 @@ class GatewayDaemon:
         await self._init_engine()
         self._register_signal_handlers()
 
+        # Create router and WebSocket server
+        router = MessageRouter(
+            engine=self._engine,
+            memory=self._memory,
+            db=self._db,
+            data_dir=self.config.data_dir,
+        )
+        self._ws_server = GatewayServer("0.0.0.0", self.port, router)
+        await self._ws_server.start()
+
         print(
-            f"LingYa daemon started (PID: {os.getpid()}, port: TODO)"
+            f"LingYa daemon started (PID: {os.getpid()}, port: {self.port})"
         )
 
         # Block until shutdown is triggered (signal or programmatic)
         await self._shutdown_event.wait()
+
+        # Stop the WebSocket server before cleanup
+        if self._ws_server:
+            await self._ws_server.stop()
 
     async def shutdown(self) -> None:
         """Graceful shutdown.
