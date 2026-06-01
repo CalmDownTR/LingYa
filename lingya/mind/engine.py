@@ -161,6 +161,41 @@ class MindEngine:
         if self._db is not None:
             await self.save_state(self._db)
 
+    async def idle_tick(self) -> None:
+        """Execute one idle heartbeat tick.
+
+        PAD moves a tiny step toward the OCEAN-derived baseline
+        (spring-restore without any OCC emotion pull). No OCC/IPC change.
+        No turn counter increment. No importance scoring. No reflection.
+
+        This simulates "nothing happened, mood returns to baseline over time."
+        """
+        from lingya.mind.affect import evolve_pad, ocean_to_pad_baseline
+
+        # Zero emotion pull, tiny spring constant for slow drift
+        zero_pull = PADPoint(pleasure=0.0, arousal=0.0, dominance=0.0)
+        baseline = ocean_to_pad_baseline(self.state.current_ocean)
+
+        self.state.current_pad = evolve_pad(
+            self.state.current_pad,
+            zero_pull,
+            baseline,
+            spring_k=0.01,
+        )
+        self.state.pad_history.append(
+            PADPoint(
+                pleasure=self.state.current_pad.pleasure,
+                arousal=self.state.current_pad.arousal,
+                dominance=self.state.current_pad.dominance,
+            )
+        )
+        if len(self.state.pad_history) > 200:
+            self.state.pad_history = self.state.pad_history[-100:]
+
+        # Auto-persist
+        if self._db is not None:
+            await self.save_state(self._db)
+
     async def _deferred_importance_score(self, text: str, entry_id: str) -> None:
         """Background: score importance with LLM and update stored metadata."""
         try:

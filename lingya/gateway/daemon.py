@@ -12,6 +12,7 @@ import asyncio
 import os
 import signal
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
@@ -24,6 +25,9 @@ from lingya.memory import EnhancedMemoryStore
 from lingya.mind import MindEngine, build_static_prompt
 from lingya.mind.config import MindConfig
 from lingya.storage.db import Database
+
+if TYPE_CHECKING:
+    from lingya.gateway.background import BackgroundRunner
 
 
 class GatewayDaemon:
@@ -53,6 +57,7 @@ class GatewayDaemon:
         self._model: ChatOpenAI | None = None
         self._memory: EnhancedMemoryStore | None = None
         self._ws_server: GatewayServer | None = None
+        self._bg_runner: BackgroundRunner | None = None
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -85,12 +90,30 @@ class GatewayDaemon:
         self._ws_server = GatewayServer("0.0.0.0", self.port, router)
         await self._ws_server.start()
 
+        # Start background runner (heartbeat + diary scheduler)
+        # Only start if all dependencies are initialized (they always are in
+        # normal operation; guarded for test scenarios that mock init methods).
+        if self._engine is not None and self._db is not None and self._model is not None:
+            from lingya.gateway.background import BackgroundRunner
+
+            self._bg_runner = BackgroundRunner(
+                engine=self._engine,
+                db=self._db,
+                model=self._model,
+                data_dir=self.config.data_dir,
+            )
+            await self._bg_runner.start()
+
         print(
             f"LingYa daemon started (PID: {os.getpid()}, port: {self.port})"
         )
 
         # Block until shutdown is triggered (signal or programmatic)
         await self._shutdown_event.wait()
+
+        # Stop background runner before WebSocket server
+        if self._bg_runner:
+            await self._bg_runner.stop()
 
         # Stop the WebSocket server before cleanup
         if self._ws_server:
