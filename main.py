@@ -27,6 +27,26 @@ from lingya.memory import EnhancedMemoryStore
 from lingya.storage.db import Database
 
 
+async def daemon_main() -> None:
+    """Run LingYa in daemon mode — long-running process with GatewayDaemon."""
+    config = load_config()
+
+    from lingya.mind import load_mind_config
+
+    mind_config = load_mind_config(config.persona_config_path)
+
+    from lingya.gateway import GatewayDaemon
+
+    daemon = GatewayDaemon(config=config, mind_config=mind_config)
+
+    try:
+        await daemon.start()
+    except (KeyboardInterrupt, EOFError):
+        pass
+    finally:
+        await daemon.shutdown()
+
+
 async def main() -> None:
     config = load_config()
 
@@ -144,4 +164,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if "--daemon" in sys.argv:
+        asyncio.run(daemon_main())
+    else:
+        asyncio.run(main())
