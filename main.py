@@ -47,6 +47,61 @@ async def daemon_main() -> None:
         await daemon.shutdown()
 
 
+async def start_main() -> None:
+    """lingya start — auto-launch daemon + attach CLI as WebSocket client.
+
+    1. Check if daemon is already running (via PID file)
+    2. If not, launch daemon as a subprocess and wait for it to be ready
+    3. Connect CLI via WebSocket to the Gateway
+    """
+    from lingya.gateway.daemon import GatewayDaemon
+    from lingya.gateway.client import GatewayClient
+
+    PORT = 8765
+
+    # 1. Check if daemon is already running
+    if not GatewayDaemon.is_running():
+        import subprocess
+
+        # Launch daemon as a subprocess using the same Python + main.py
+        daemon_proc = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--daemon"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        # Wait for daemon to be ready (poll the PID file)
+        for _ in range(50):  # 5 second timeout (50 * 0.1s)
+            if GatewayDaemon.is_running():
+                break
+            await asyncio.sleep(0.1)
+        else:
+            print("Failed to start daemon after 5 seconds", file=sys.stderr)
+            return
+
+    # 2. Connect CLI via WebSocket
+    client = GatewayClient(port=PORT)
+    try:
+        await client.connect()
+
+        cli = LingYaCLI(
+            agent=None,     # Not used in WS mode
+            db=None,        # Not used in WS mode
+            model=None,     # Not used in WS mode
+            engine=None,    # Not used in WS mode
+            memory=None,    # Not used in WS mode
+            ws_client=client,
+        )
+        try:
+            await cli.run_ws()
+        except (KeyboardInterrupt, EOFError):
+            pass
+    except ConnectionError as e:
+        print(f"Failed to connect to Gateway: {e}", file=sys.stderr)
+    finally:
+        await client.close()
+
+
 async def main() -> None:
     config = load_config()
 
@@ -166,5 +221,7 @@ async def main() -> None:
 if __name__ == "__main__":
     if "--daemon" in sys.argv:
         asyncio.run(daemon_main())
+    elif "start" in sys.argv:
+        asyncio.run(start_main())
     else:
         asyncio.run(main())

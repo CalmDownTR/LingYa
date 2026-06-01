@@ -1,15 +1,10 @@
-"""Test WebSocket protocol helpers — unit tests, no real server.
-
-These tests import protocol helpers from the shared protocol module.
-"""
+"""Test WebSocket protocol helpers — unit tests, no real server."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import struct
-import os
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,10 +30,6 @@ def _make_reader(data: bytes) -> asyncio.StreamReader:
     reader.feed_data(data)
     reader.feed_eof()
     return reader
-
-
-# _encode_masked_frame is now available from lingya.gateway.protocol.
-# Tests below use it directly instead of the old _encode_masked_frame helper.
 
 
 # ── _generate_accept_key tests ──────────────────────────────────────
@@ -155,6 +146,86 @@ class TestEncodeFrame:
         assert (frame[1] & 0x80) == 0
 
 
+# ── _encode_masked_frame tests ──────────────────────────────────────
+
+
+class TestEncodeMaskedFrame:
+    def test_default_mask_is_random(self):
+        """When no mask is provided, one is generated automatically."""
+        frame = _encode_masked_frame(OP_TEXT, b"hello")
+        # Frame has MASK bit set
+        assert (frame[1] & 0x80) != 0
+
+        # Two calls should use different masks (probabilistic)
+        frame2 = _encode_masked_frame(OP_TEXT, b"hello")
+        # The mask bytes (bytes 2-5 for small payload) should differ
+        mask1 = frame[2:6]
+        mask2 = frame2[2:6]
+        # Extremely unlikely to be the same
+        assert mask1 != mask2
+
+    def test_explicit_mask(self):
+        """Providing an explicit mask uses it."""
+        payload = b"hello"
+        mask = b"\x01\x02\x03\x04"
+        frame = _encode_masked_frame(OP_TEXT, payload, mask)
+
+        # Frame: [0x81, 0x85, mask(4), masked_payload(5)]
+        assert frame[0] == 0x81  # FIN + text opcode
+        assert frame[1] == 0x85  # MASK=1 + len=5
+        assert frame[2:6] == mask
+        # Verify payload is correctly masked
+        expected_masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        assert frame[6:] == expected_masked
+
+    @pytest.mark.asyncio
+    async def test_masked_frame_round_trip(self):
+        """Masked frame can be read back by _read_frame."""
+        payload = b"Hello, masked world!"
+        frame = _encode_masked_frame(OP_TEXT, payload)
+
+        reader = _make_reader(frame)
+        opcode, result = await _read_frame(reader)
+
+        assert opcode == OP_TEXT
+        assert result == payload
+
+    @pytest.mark.asyncio
+    async def test_masked_close_frame(self):
+        """Close frame can be masked."""
+        frame = _encode_masked_frame(OP_CLOSE, b"", b"\xAA\xBB\xCC\xDD")
+
+        reader = _make_reader(frame)
+        opcode, payload = await _read_frame(reader)
+
+        assert opcode == OP_CLOSE
+        assert payload == b""
+
+    @pytest.mark.asyncio
+    async def test_masked_large_payload(self):
+        """Large masked payload round-trips correctly."""
+        payload = b"x" * 300
+        frame = _encode_masked_frame(OP_TEXT, payload)
+
+        reader = _make_reader(frame)
+        opcode, result = await _read_frame(reader)
+
+        assert opcode == OP_TEXT
+        assert result == payload
+
+    def test_opcode_preserved_in_masked_frame(self):
+        """Opcode is set correctly even when masked."""
+        text_frame = _encode_masked_frame(OP_TEXT, b"x")
+        close_frame = _encode_masked_frame(OP_CLOSE, b"")
+        ping_frame = _encode_masked_frame(OP_PING, b"ping")
+        pong_frame = _encode_masked_frame(OP_PONG, b"pong")
+
+        assert text_frame[0] == 0x81
+        assert close_frame[0] == 0x88
+        assert ping_frame[0] == 0x89
+        assert pong_frame[0] == 0x8A
+
+
 # ── _read_frame tests (via round-trip) ──────────────────────────────
 
 
@@ -253,10 +324,8 @@ class TestMaskedFrame:
         payload = b"\x00\x01\x02\x03"
         mask = b"\xFF\xFF\xFF\xFF"
 
-        # Verify the mask is applied correctly at encoding level
         frame = _encode_masked_frame(OP_TEXT, payload, mask)
         # The masked payload in the frame should be bit-flipped
-        # Frame structure: 2-byte header + 4-byte mask + payload
         in_transit_payload = frame[6:]
         expected_masked = bytes(b ^ 0xFF for b in payload)
         assert in_transit_payload == expected_masked
