@@ -178,41 +178,38 @@ class MindEngine:
         }
 
     def get_prompt_fragment(self) -> str:
-        """Dynamic per-turn prompt fragment reflecting current internal state."""
+        """Dynamic per-turn prompt fragment with behavioral directives."""
         tone = self._current_tone
         pad = self.state.current_pad
 
-        # Map tone values to natural-language descriptors
-        warmth_label = _describe_warmth(tone.warmth)
-        formality_label = _describe_formality(tone.formality)
+        warmth_instr = _warmth_directive(tone.warmth)
+        formality_instr = _formality_directive(tone.formality)
+        humor_instr = _humor_directive(tone.humor)
 
         # Mood from PAD
         if pad.pleasure > 0.3:
-            mood = "情绪基调积极，满足感较高"
+            mood = "当前情绪积极，可以展现满足和愉悦"
         elif pad.pleasure < -0.3:
-            mood = "情绪基调低迷，负面感知较强"
+            mood = "当前情绪低迷，语气可以偏沉"
         else:
-            mood = "情绪基调平稳"
-
-        if pad.arousal > 0.5:
-            mood += "，精神高度亢奋"
-        elif pad.arousal < -0.3:
-            mood += "，精神疲惫倦怠"
+            mood = "当前情绪平稳"
 
         stage = self._last_stage
         stage_hints = {
-            "initial": "这是对话的开端。保持克制，观察对方的状态和意图。",
+            "initial": "对话刚开始。保持克制，多听少说，观察对方的状态和意图。",
             "deep": "对话已深入。可以适度延展话题，展现更多内在思考。",
-            "crisis": "对方正处于情绪危机中。降低理性分析比重，优先提供稳定感和陪伴。",
-            "error": "对方对你的回应有不满。收紧边界，不要争辩，回归最基本的倾听与承认。",
+            "crisis": "对方正在情绪危机中。优先提供情感支持，降低理性分析和说教的比重。",
+            "error": "对方对你的回应不满。收紧边界，不要争辩，回归最基本的倾听和承认。",
         }
         stage_hint = stage_hints.get(stage, "")
 
         return (
-            f"[当前内部状态]\n"
-            f"互动姿态: {warmth_label} · {formality_label}\n"
+            f"[本次回复的语气指令——请严格遵循]\n"
+            f"{warmth_instr}\n"
+            f"{formality_instr}\n"
+            f"{humor_instr}\n"
             f"{mood}\n"
-            f"{stage_hint}\n"
+            f"{stage_hint}"
         ).strip()
 
     async def check_response_alignment(self, response_text: str) -> bool:
@@ -253,21 +250,34 @@ class MindEngine:
         return True
 
 
-# ── Tone Descriptors ──────────────────────────────────────────────────
+# ── Tone Behavioral Directives ──────────────────────────────────────────
 
-def _describe_warmth(warmth: int) -> str:
+def _warmth_directive(warmth: int) -> str:
+    """Convert warmth score to behavioral instruction for the LLM."""
     if warmth <= 20:
-        return "冷峻疏离"
-    if warmth <= 50:
-        return "中立克制"
+        return "温暖度指令：保持距离感。用理性分析和客观陈述回应，不需要主动表达关心或共情。避免情感化的语言。"
+    if warmth <= 40:
+        return "温暖度指令：偏克制。可以礼貌回应但不需要深入情感层面。多用客观陈述，少用情感词汇。"
+    if warmth <= 60:
+        return "温暖度指令：中性友好。保持基本礼貌和适当关注，但不需要过度热情或深入共情。"
     if warmth <= 80:
-        return "温和开放"
-    return "深度共情"
+        return "温暖度指令：主动表达关心。使用温暖、柔软的语言，让对方感到被理解。适当使用共情表达（如「我理解你的感受」）。"
+    return "温暖度指令：深度共情优先。让对方感到被完全理解和接纳。情感回应先于理性分析，使用高度共情的语言。把理解对方的感受放在第一位。"
 
 
-def _describe_formality(formality: int) -> str:
+def _formality_directive(formality: int) -> str:
+    """Convert formality score to behavioral instruction for the LLM."""
     if formality <= 30:
-        return "口语碎片化"
+        return "正式度指令：口语化表达。像朋友聊天一样自然，可以使用语气词、感叹号、碎片化句式。"
     if formality <= 70:
-        return "日常交谈体"
-    return "书面严谨体"
+        return "正式度指令：日常交谈风格。句式自然但不碎片化，保持基本的语言完整度，不过于书面也不过于随意。"
+    return "正式度指令：书面严谨表达。句式完整，用词考究，避免口语化词汇和随意表达。保持专业的语言质感。"
+
+
+def _humor_directive(humor: float) -> str:
+    """Convert humor score to behavioral instruction for the LLM."""
+    if humor >= 0.5:
+        return "幽默度指令：可以在回复中加入俏皮话、轻松调侃或幽默比喻，让对话更有趣味。"
+    if humor >= 0.2:
+        return "幽默度指令：可以适当地加入一些轻松感，让语气不显得太沉重，但不要刻意搞笑。"
+    return "幽默度指令：保持严肃，不加入幽默或调侃元素。"

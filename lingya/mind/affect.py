@@ -369,7 +369,7 @@ def evolve_pad(
     current: PADPoint,
     occ_pull: PADPoint,
     baseline: PADBaseline,
-    spring_k: float = 0.1,
+    spring_k: float = 0.2,
 ) -> PADPoint:
     """Apply OCC emotion pull + spring-restore toward baseline.
 

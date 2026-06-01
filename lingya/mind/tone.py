@@ -92,8 +92,9 @@ def apply_ocean_modulation(
     Midpoint 50 for warmth/formality is a fixed point — when raw equals 50, OCEAN has no effect.
 
     Modulation rules (literature-backed):
-    - Agreeableness: suppresses warmth deviation (high A = emotionally "sticky" warmth),
-      inverts formality slope (high A + low dominance = nervous politeness)
+    - Agreeableness: asymmetric warmth gain — amplifies positive warmth (high A = warmer),
+      dampens negative/cold deviation (high A = emotionally resilient, stays warmer under stress).
+      Inverts formality slope (high A + low dominance = nervous politeness).
     - Neuroticism: global gain on warmth and formality deviations (does NOT affect humor)
     - Extraversion: amplifies humor expressiveness
     """
@@ -101,8 +102,13 @@ def apply_ocean_modulation(
     n = ocean.neuroticism
     e = ocean.extraversion
 
-    # Agreeableness: dampen warmth slope [0.3, 1.0]
-    w_gain = 1.0 - a * 0.7
+    # Agreeableness: asymmetric warmth gain
+    if raw["warmth"] >= 50:
+        # Positive deviation: high A amplifies warmth [0.3, 1.0]
+        w_gain = 0.3 + a * 0.7
+    else:
+        # Negative deviation: high A dampens coldness (stays warmer) [1.0, 0.3]
+        w_gain = 1.0 - a * 0.7
     # Agreeableness: invert formality slope [-1.0, 1.0]
     f_mod = 1.0 - a * 2.0
     # Neuroticism: global emotional volatility gain [0.5, 1.5]
@@ -134,8 +140,8 @@ def compute_dynamic_tone(
     modulated = apply_ocean_modulation(raw, ocean)
     delta = stage_tone_delta(stage)
 
-    warmth = int(max(0.0, min(100.0, modulated["warmth"] * 0.3 + base.warmth * 0.7 + delta["warmth"])))
-    formality = int(max(0.0, min(100.0, modulated["formality"] * 0.3 + base.formality * 0.7 + delta["formality"])))
-    humor = max(0.0, min(1.0, modulated["humor"] * 0.3 + base.humor * 0.7 + delta["humor"]))
+    warmth = int(max(0.0, min(100.0, modulated["warmth"] * 0.5 + base.warmth * 0.5 + delta["warmth"])))
+    formality = int(max(0.0, min(100.0, modulated["formality"] * 0.5 + base.formality * 0.5 + delta["formality"])))
+    humor = max(0.0, min(1.0, modulated["humor"] * 0.5 + base.humor * 0.5 + delta["humor"]))
 
     return ToneMatrix(warmth=warmth, formality=formality, humor=humor)

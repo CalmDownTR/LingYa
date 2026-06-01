@@ -126,8 +126,8 @@ class TestMindEngine:
         )
         fragment = engine.get_prompt_fragment()
         assert len(fragment) > 0
-        # Should mention current state
-        assert "当前内部状态" in fragment or "互动姿态" in fragment
+        # Should mention tone directive
+        assert "语气指令" in fragment or "度指令" in fragment
 
     async def test_save_and_load_state(self, mind_config, mock_llm, mock_memory, db):
         from lingya.mind import MindEngine

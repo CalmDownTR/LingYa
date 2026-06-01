@@ -36,6 +36,9 @@ skills-lock.json
 # Data
 data/
 
+# Eval outputs (generated, vary per run)
+tests/output/
+
 # Environment (secrets)
 .env
 agent_config.yaml
