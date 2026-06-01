@@ -111,6 +111,7 @@ class GatewayDaemon:
                 db=self._db,
                 model=self._model,
                 data_dir=self.config.data_dir,
+                memory=self._memory,
             )
             await self._bg_runner.start()
 

@@ -133,7 +133,10 @@ class EnhancedMemoryStore(MemoryStore):
     """
 
     def store_with_importance(self, text: str, importance: float = 5.0) -> str:
-        """Store a memory with an importance score (1-10)."""
+        """Store a memory with an importance score (1-10).
+
+        Sets retrieval_weight = importance initially and archived = False.
+        """
         col = self.collection
         entry_id = f"mem_{time.monotonic_ns()}"
         col.add(
@@ -142,6 +145,8 @@ class EnhancedMemoryStore(MemoryStore):
             metadatas=[{
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "importance": importance,
+                "retrieval_weight": importance,
+                "archived": False,
             }],
         )
         return entry_id
@@ -171,7 +176,13 @@ class EnhancedMemoryStore(MemoryStore):
         top_k: int = 5,
         recency_lambda: float = 0.01,
     ) -> list[dict]:
-        """Weighted search: score = exp(-lambda * hours_since) * importance * similarity."""
+        """Weighted search: score = exp(-lambda * hours_since) * retrieval_weight * similarity.
+
+        Uses retrieval_weight from metadata. Falls back to importance for
+        backward compatibility with memories stored before v0.6.
+
+        Excludes archived memories from search results.
+        """
         col = self.collection
         count = col.count()
         if count == 0:
@@ -186,8 +197,23 @@ class EnhancedMemoryStore(MemoryStore):
         metas = results.get("metadatas", [[]])[0]
 
         for mem_id, doc, meta in zip(ids, docs, metas):
-            importance = float(meta.get("importance", 5.0)) if meta else 5.0
-            ts_str = meta.get("timestamp", "") if meta else ""
+            if meta:
+                # Exclude archived memories
+                archived_val = meta.get("archived", False)
+                if archived_val is True or archived_val == "true":
+                    continue
+
+                importance = float(meta.get("importance", 5.0))
+                # Use retrieval_weight, fall back to importance for backward compat
+                retrieval_weight = float(
+                    meta.get("retrieval_weight", importance)
+                )
+                ts_str = meta.get("timestamp", "")
+            else:
+                importance = 5.0
+                retrieval_weight = 5.0
+                ts_str = ""
+
             hours_since = 0.0
             if ts_str:
                 try:
@@ -196,11 +222,12 @@ class EnhancedMemoryStore(MemoryStore):
                 except ValueError:
                     pass
             recency_weight = math.exp(-recency_lambda * hours_since)
-            combined = recency_weight * importance
+            combined = recency_weight * retrieval_weight
             items.append({
                 "id": mem_id,
                 "text": doc,
                 "importance": importance,
+                "retrieval_weight": retrieval_weight,
                 "hours_since": hours_since,
                 "weighted_score": combined,
             })
@@ -224,3 +251,150 @@ class EnhancedMemoryStore(MemoryStore):
             if meta and "importance" in meta:
                 total += float(meta["importance"])
         return total
+
+    # ── Memory Decay ──────────────────────────────────────────────────
+
+    def apply_decay(self) -> int:
+        """Apply three-level decay to all non-critical memories.
+
+        Called periodically by BackgroundRunner.  Returns the number of
+        memories affected (decayed + archived + hard-deleted).
+
+        Three levels:
+
+        * Critical (importance > 0.8): retrieval_weight locked, never decays.
+          If retrieval_weight is missing (backward compat), it is set to
+          importance on the first call.
+
+        * Normal (0.3 <= importance <= 0.8): linear decay:
+          retrieval_weight = importance * max(0, 1 - days / 180).
+          Day 90 = half-life; day 180 = weight reaches 0.
+
+        * Micro (importance < 0.3): 30 days -> soft delete (mark archived,
+          retrieval_weight = 0).  Already-archived memories that have been
+          archived for 90+ days are hard-deleted from ChromaDB.
+        """
+        col = self.collection
+        count = col.count()
+        if count == 0:
+            return 0
+
+        results = col.get()
+        ids = results.get("ids", [])
+        metadatas = results.get("metadatas", [])
+        if not ids:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        affected = 0
+        ids_to_delete: list[str] = []
+        ids_to_update: list[str] = []
+        new_metadatas: list[dict] = []
+
+        for mem_id, meta in zip(ids, metadatas):
+            if not meta:
+                continue
+
+            importance = float(meta.get("importance", 5.0))
+            ts_str = meta.get("timestamp", "")
+            if not ts_str:
+                continue
+
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                days_since = (now - ts).total_seconds() / 86400.0
+            except ValueError:
+                continue
+
+            # ── Critical: locked ──────────────────────────────────
+            if importance > 0.8:
+                rw = meta.get("retrieval_weight")
+                if rw is None:
+                    # Backward compat: first run sets retrieval_weight
+                    meta_copy = dict(meta)
+                    meta_copy["retrieval_weight"] = importance
+                    ids_to_update.append(mem_id)
+                    new_metadatas.append(meta_copy)
+                    affected += 1
+                continue
+
+            # ── Already archived? Check hard-delete threshold ──────
+            archived_val = meta.get("archived", False)
+            is_archived = archived_val is True or archived_val == "true"
+            if is_archived:
+                archived_at_str = meta.get("archived_at", "")
+                if archived_at_str:
+                    try:
+                        archived_at = datetime.fromisoformat(archived_at_str)
+                        archived_days = (
+                            now - archived_at
+                        ).total_seconds() / 86400.0
+                        if archived_days >= 90:
+                            ids_to_delete.append(mem_id)
+                            affected += 1
+                    except ValueError:
+                        pass
+                continue
+
+            # ── Micro: archive after 30 days ──────────────────────
+            if importance < 0.3 and days_since >= 30:
+                meta_copy = dict(meta)
+                meta_copy["archived"] = True
+                meta_copy["archived_at"] = now.isoformat()
+                meta_copy["retrieval_weight"] = 0.0
+                ids_to_update.append(mem_id)
+                new_metadatas.append(meta_copy)
+                affected += 1
+                continue
+
+            # ── Normal: linear decay ──────────────────────────────
+            new_weight = importance * max(0.0, 1.0 - days_since / 180.0)
+            current_weight = meta.get("retrieval_weight")
+            if current_weight is None:
+                current_weight_float = None
+            else:
+                current_weight_float = float(current_weight)
+
+            if (
+                current_weight_float is None
+                or abs(current_weight_float - new_weight) > 0.0001
+            ):
+                meta_copy = dict(meta)
+                meta_copy["retrieval_weight"] = round(new_weight, 4)
+                ids_to_update.append(mem_id)
+                new_metadatas.append(meta_copy)
+                affected += 1
+
+        # Apply hard deletes
+        for mem_id in ids_to_delete:
+            col.delete(ids=[mem_id])
+
+        # Apply metadata updates
+        if ids_to_update:
+            col.update(ids=ids_to_update, metadatas=new_metadatas)
+
+        return affected
+
+    def recover(self, mem_id: str) -> bool:
+        """Recover an archived memory.
+
+        Resets retrieval_weight to importance and clears the archived flag.
+        Returns True if the memory was recovered, False if not found.
+        """
+        col = self.collection
+        results = col.get(ids=[mem_id])
+        if not results or not results.get("ids"):
+            return False
+
+        meta = results["metadatas"][0] if results["metadatas"] else {}
+        if not meta:
+            return False
+
+        importance = float(meta.get("importance", 5.0))
+        new_meta = dict(meta)
+        new_meta["retrieval_weight"] = importance
+        new_meta["archived"] = False
+        new_meta["archived_at"] = ""  # clear (ChromaDB merges, not replaces)
+
+        col.update(ids=[mem_id], metadatas=[new_meta])
+        return True

@@ -374,6 +374,36 @@ class TestMemory:
         assert result["type"] == "memory_response"
         assert result["payload"]["action"] == "search"
 
+    async def test_memory_recover_valid_id_returns_success(self, router, mock_memory):
+        """Recover with valid id returns success."""
+        mock_memory.recover = MagicMock(return_value=True)
+        result = await router.route(
+            {"type": "memory", "payload": {"action": "recover", "id": "mem_42"}}
+        )
+        assert result["type"] == "memory_response"
+        assert result["payload"]["action"] == "recover"
+        assert result["payload"]["recovered"] is True
+        assert result["payload"]["id"] == "mem_42"
+        mock_memory.recover.assert_called_once_with("mem_42")
+
+    async def test_memory_recover_missing_id_returns_error(self, router):
+        """Recover with missing id returns error."""
+        result = await router.route(
+            {"type": "memory", "payload": {"action": "recover"}}
+        )
+        assert result["type"] == "error"
+        assert "Missing memory id" in result["payload"]["message"]
+
+    async def test_memory_recover_nonexistent_id_returns_false(self, router, mock_memory):
+        """Recover with non-existent id returns False but doesn't error."""
+        mock_memory.recover = MagicMock(return_value=False)
+        result = await router.route(
+            {"type": "memory", "payload": {"action": "recover", "id": "mem_bogus"}}
+        )
+        assert result["type"] == "memory_response"
+        assert result["payload"]["recovered"] is False
+        assert result["payload"]["id"] == "mem_bogus"
+
 
 # ── Chat tests ──────────────────────────────────────────────────────
 

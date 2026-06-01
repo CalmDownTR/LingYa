@@ -1,7 +1,8 @@
-"""BackgroundRunner — heartbeat and diary scheduler for idle daemon lifecycle.
+"""BackgroundRunner — heartbeat, diary scheduler, and memory decay for idle daemon lifecycle.
 
 Gives LingYa "a life beyond conversations" — PAD slowly drifts toward
-baseline when idle, and diary generation is scheduled periodically.
+baseline when idle, diary generation is scheduled periodically, and
+memory decay runs once per day.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
+    from lingya.memory.store import EnhancedMemoryStore
     from lingya.mind.engine import MindEngine
     from lingya.storage.db import Database
 
@@ -22,9 +24,10 @@ logger = logging.getLogger(__name__)
 class BackgroundRunner:
     """Background tasks that give LingYa an independent life rhythm.
 
-    Two loops:
+    Three loops:
     - heartbeat: PAD idle drift, fires every N seconds
     - diary_scheduler: checks if diary is due, fires every hour
+    - decay: memory decay, fires once per day
     """
 
     def __init__(
@@ -33,19 +36,24 @@ class BackgroundRunner:
         db: Database,
         model: BaseChatModel,
         data_dir: str,
+        memory: EnhancedMemoryStore | None = None,
         heartbeat_interval: int = 60,
         diary_check_interval: int = 3600,
+        decay_interval: int = 86400,
     ) -> None:
         self._engine = engine
         self._db = db
         self._model = model
         self._data_dir = data_dir
+        self._memory = memory
         self.heartbeat_interval = heartbeat_interval
         self.diary_check_interval = diary_check_interval
+        self.decay_interval = decay_interval
 
         self._running: bool = True
         self._heartbeat_task: asyncio.Task | None = None
         self._diary_task: asyncio.Task | None = None
+        self._decay_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start background loops as asyncio tasks.
@@ -58,6 +66,8 @@ class BackgroundRunner:
         self._running = True
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self._diary_task = asyncio.create_task(self._diary_scheduler_loop())
+        if self._memory is not None:
+            self._decay_task = asyncio.create_task(self._decay_loop())
 
     async def stop(self) -> None:
         """Cancel background tasks and wait for them to finish."""
@@ -70,6 +80,9 @@ class BackgroundRunner:
         if self._diary_task is not None:
             self._diary_task.cancel()
             tasks.append(self._diary_task)
+        if self._decay_task is not None:
+            self._decay_task.cancel()
+            tasks.append(self._decay_task)
 
         for task in tasks:
             try:
@@ -79,6 +92,7 @@ class BackgroundRunner:
 
         self._heartbeat_task = None
         self._diary_task = None
+        self._decay_task = None
 
     @property
     def is_running(self) -> bool:
@@ -110,6 +124,31 @@ class BackgroundRunner:
                 break
 
             await self._try_generate_diary()
+
+    # ── Memory Decay Loop ───────────────────────────────────────────
+
+    async def _decay_loop(self) -> None:
+        """Apply memory decay once per day (default: every 86400 seconds)."""
+        while self._running:
+            try:
+                await asyncio.sleep(self.decay_interval)
+            except asyncio.CancelledError:
+                break
+
+            if not self._running:
+                break
+
+            if self._memory is None:
+                continue
+
+            try:
+                affected = self._memory.apply_decay()
+                if affected > 0:
+                    logger.info("Memory decay: %d memories affected", affected)
+            except Exception:
+                logger.exception(
+                    "Memory decay error — will retry on next tick"
+                )
 
     async def _try_generate_diary(self) -> None:
         """Check diary eligibility and generate if due.

@@ -361,3 +361,176 @@ class TestDiaryScheduler:
         with patch("lingya.diary.should_generate_diary", return_value=True):
             # Should not raise
             await runner._try_generate_diary()
+
+
+# ── Memory Decay Loop tests ───────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_memory():
+    """Mock EnhancedMemoryStore for decay testing."""
+    memory = MagicMock()
+    memory.apply_decay = MagicMock(return_value=0)
+    return memory
+
+
+class TestDecayLoop:
+    @pytest.mark.asyncio
+    async def test_decay_loop_calls_apply_decay(
+        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+    ):
+        """Decay loop calls apply_decay on the memory store."""
+        from lingya.gateway.background import BackgroundRunner
+
+        mock_memory.apply_decay.return_value = 3
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            db=mock_db,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+            memory=mock_memory,
+            decay_interval=0.01,
+        )
+
+        # Run the loop as a task and cancel after a short time
+        runner._running = True
+        task = asyncio.create_task(runner._decay_loop())
+        await asyncio.sleep(0.05)  # Let one tick complete
+        runner._running = False
+        await asyncio.sleep(0.05)  # Let the loop see _running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        mock_memory.apply_decay.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_decay_loop_skips_when_no_memory(
+        self, mock_engine, mock_db, mock_model, tmp_data_dir
+    ):
+        """Decay loop is a no-op when memory is None (not started)."""
+        from lingya.gateway.background import BackgroundRunner
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            db=mock_db,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+            memory=None,
+            decay_interval=0.01,
+        )
+
+        # Run loop briefly — should not raise because memory=None is handled
+        runner._running = True
+        task = asyncio.create_task(runner._decay_loop())
+        await asyncio.sleep(0.05)
+        runner._running = False
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @pytest.mark.asyncio
+    async def test_decay_loop_not_started_when_memory_none(
+        self, mock_engine, mock_db, mock_model, tmp_data_dir
+    ):
+        """When memory is None, _decay_task is never created on start."""
+        from lingya.gateway.background import BackgroundRunner
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            db=mock_db,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+            memory=None,
+            heartbeat_interval=3600,
+            diary_check_interval=3600,
+        )
+
+        await runner.start()
+        assert runner._decay_task is None
+        await runner.stop()
+
+    @pytest.mark.asyncio
+    async def test_decay_interval_is_configurable(
+        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+    ):
+        """Decay interval can be configured via constructor."""
+        from lingya.gateway.background import BackgroundRunner
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            db=mock_db,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+            memory=mock_memory,
+            decay_interval=43200,
+        )
+        assert runner.decay_interval == 43200
+
+    @pytest.mark.asyncio
+    async def test_decay_loop_starts_when_memory_provided(
+        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+    ):
+        """When memory is provided, decay task is created on start."""
+        from lingya.gateway.background import BackgroundRunner
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            db=mock_db,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+            memory=mock_memory,
+            heartbeat_interval=3600,
+            diary_check_interval=3600,
+            decay_interval=0.01,
+        )
+
+        await runner.start()
+        assert runner._decay_task is not None
+        await runner.stop()
+
+    @pytest.mark.asyncio
+    async def test_decay_loop_handles_error_gracefully(
+        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+    ):
+        """Decay loop logs error and continues, does not crash."""
+        from lingya.gateway.background import BackgroundRunner
+
+        call_count = 0
+
+        def apply_decay_side_effect():
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("Decay error")
+
+        mock_memory.apply_decay.side_effect = apply_decay_side_effect
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            db=mock_db,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+            memory=mock_memory,
+            decay_interval=0.01,
+        )
+
+        # Run the loop as a task — apply_decay should be called at least once
+        # even though it raises
+        runner._running = True
+        task = asyncio.create_task(runner._decay_loop())
+        await asyncio.sleep(0.05)
+        runner._running = False
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        assert call_count >= 1  # apply_decay was called despite raising

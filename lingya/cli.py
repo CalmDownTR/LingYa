@@ -345,6 +345,8 @@ class LingYaCLI:
                 self._cmd_forget(arg)
             case "/remember":
                 self._cmd_remember(arg)
+            case "/recover":
+                self._cmd_recover(arg)
             case "/diary":
                 self._cmd_diary(arg)
             case _:
@@ -428,6 +430,19 @@ class LingYaCLI:
             return
         mem_id = self.memory.store(arg)
         self.console.print(f"[green]Remembered: {arg} (id: {mem_id})[/]")
+
+    def _cmd_recover(self, arg: str) -> None:
+        if self.memory is None:
+            self.console.print("[yellow]Memory system not available.[/]")
+            return
+        if not arg:
+            self.console.print("[yellow]Usage: /recover <memory_id>[/]")
+            return
+        recovered = self.memory.recover(arg)
+        if recovered:
+            self.console.print(f"[green]Recovered memory: {arg}[/]")
+        else:
+            self.console.print(f"[yellow]Memory not found: {arg}[/]")
 
     def _cmd_diary(self, arg: str) -> None:
         from lingya.diary import get_diary_dir, list_diaries, read_diary
@@ -565,6 +580,7 @@ class LingYaCLI:
 | `/memories` | List all stored memories |
 | `/forget <index>` | Delete a memory by its index |
 | `/remember <text>` | Manually add a memory |
+| `/recover <id>` | Recover an archived memory |
 | `/help` | Show this help |
 | `/exit`, `/quit` | Exit LingYa |
 

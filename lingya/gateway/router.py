@@ -153,7 +153,7 @@ class MessageRouter:
         }
 
     async def _handle_memory(self, payload: dict) -> dict:
-        """Search or list memories."""
+        """Search, list, or recover memories."""
         action = payload.get("action", "search")
 
         if action == "list":
@@ -161,6 +161,23 @@ class MessageRouter:
             return {
                 "type": "memory_response",
                 "payload": {"action": "list", "memories": memories},
+            }
+
+        if action == "recover":
+            mem_id = payload.get("id", "")
+            if not mem_id:
+                return {
+                    "type": "error",
+                    "payload": {"message": "Missing memory id"},
+                }
+            recovered = self._memory.recover(mem_id)
+            return {
+                "type": "memory_response",
+                "payload": {
+                    "action": "recover",
+                    "recovered": recovered,
+                    "id": mem_id,
+                },
             }
 
         # action == "search"
