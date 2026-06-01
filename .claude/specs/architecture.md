@@ -1,4 +1,4 @@
-# Architecture Spec (2026-05-28)
+# Architecture Spec (2026-06-01)
 
 ## File Tree
 
@@ -46,7 +46,13 @@ tests/
 ├── test_mind_affect.py    # OCC classification, PAD evolution, OCEAN drift tests
 ├── test_mind_engine.py    # MindEngine pipeline integration tests
 ├── test_mind_tone.py      # Tone mapping and stage detection tests
-└── eval_runner.py         # E2E runner: LLM calls + pass/fail checks
+├── eval_runner.py         # E2E corner case runner: LLM calls + pass/fail checks
+├── eval_personality.py    # OCEAN differentiation eval: pairwise A/B blind test pipeline
+├── run_conversation.py    # Multi-turn conversation driver, outputs JSON with full mind state
+├── fixtures/
+│   ├── agent_config_low_a.yaml     # A=0.1 contrast config
+│   ├── agent_config_high_a.yaml    # A=0.9 contrast config
+│   └── conversation_script.json    # 10-turn script covering 4 emotional scenarios
 ```
 
 ## Dependency Graph
@@ -114,7 +120,18 @@ The mind module is a **pure computational layer** with zero dependency on the ag
 
 The system prompt has two parts:
 1. **Static** (`build_static_prompt`): identity + core belief + guardrails + memory behavior instructions
-2. **Dynamic** (`MindEngine.get_prompt_fragment()`): injected as a SystemMessage each turn, carrying current PAD-derived mood, warmth/formality descriptors, and stage-specific hints
+2. **Dynamic** (`MindEngine.get_prompt_fragment()`): injected as a SystemMessage each turn, carrying **behavioral directives** (warmth/formality/humor instructions the LLM should follow), current PAD-derived mood, and stage-specific hints. Directives use active imperatives (e.g. "保持距离感，用理性分析回应") rather than passive state labels, for stronger LLM adherence.
+
+### Tone Modulation
+
+`compute_dynamic_tone()` blends three components with a **50/50 split** between OCEAN-modulated PAD tone and static base tone (changed from 30/70 to strengthen PAD influence):
+
+1. **PAD → raw tone** (`pad_to_tone`): continuous mapping, pleasure→warmth, dominance→formality, arousal→humor (inverted-U)
+2. **OCEAN modulation** (`apply_ocean_modulation`): deviation-modulation formula `output = midpoint + (raw - midpoint) × gain`
+   - **Asymmetric agreeableness**: high A amplifies positive warmth deviation [0.3, 1.0]; dampens negative/cold deviation [1.0, 0.3] — modeling emotional resilience
+   - Neuroticism: global gain on warmth/formality deviations
+   - Extraversion: humor expressiveness gain
+3. **Stage delta**: per-stage adjustment (initial -5 warmth, deep +5, crisis +10, etc.)
 
 ### Request Lifecycle (deepagents)
 
@@ -147,3 +164,4 @@ The system prompt has two parts:
 | MCP tools | Config-driven MCP server connection not yet wired (TODO in main.py) |
 | Embedding fn | `MindEngine.check_response_alignment()` needs an embedding function to enable identity guard; currently always returns True |
 | Belief update | `belief.py` is implemented but not yet wired into the main pipeline |
+| Last-mile differentiation | Engine produces directional tone Δ (7-9 warmth points) between A=10/A=90 configs, but the difference in final Chinese text is too subtle for reliable LLM-judge classification (pairwise accuracy ~40-60%). Prompt-based instruction injection may have a ceiling — system-prompt-level style injection or structural output constraints could be explored. |
