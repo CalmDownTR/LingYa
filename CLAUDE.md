@@ -26,46 +26,68 @@ uv run mypy lingya/              # Type check
 
 完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
 
-LingYa 基于 **deepagents** (`create_deep_agent`) 构建。
+LingYa 基于 **deepagents** (`create_deep_agent`) 构建，支持两种运行模式：
+
+**Direct mode** (`python main.py`): CLI 进程内直连 agent
+**Gateway mode** (`python main.py start`): 常驻 daemon + WebSocket 多客户端
 
 ```
-main.py → create_deep_agent()
-            ├── model: ChatOpenAI (DeepSeek API)
-            ├── tools: [memory_store, memory_search] + MCP tools (optional)
-            ├── middleware: [SummarizationToolMiddleware]
-            ├── system_prompt: build_static_prompt() + per-turn dynamic fragment
-            ├── backend: StateBackend (shared instance)
-            └── checkpointer: AsyncSqliteSaver
+main.py
+  ├── [--daemon] → GatewayDaemon (常驻进程)
+  │     ├── MindEngine (单例, 有状态连续演化)
+  │     ├── create_deep_agent() (agent 实例)
+  │     │     ├── model: ChatOpenAI (DeepSeek API)
+  │     │     ├── tools: [memory_store, memory_search]
+  │     │     ├── middleware: [SummarizationToolMiddleware]
+  │     │     ├── system_prompt: build_static_prompt()
+  │     │     ├── backend: StateBackend
+  │     │     └── checkpointer: AsyncSqliteSaver
+  │     ├── GatewayServer (asyncio WebSocket, RFC 6455, 零依赖)
+  │     ├── MessageRouter (mind/diary/memory/chat 路由)
+  │     └── BackgroundRunner (PAD idle drift + diary scheduler + memory decay)
+  │
+  ├── [start] → 自动拉起 daemon + WebSocket CLI 客户端
+  │
+  └── [default] → LingYaCLI (进程内直连 agent + MindEngine)
 
-main.py → MindEngine (pure computation, zero framework dependency)
-            ├── OCC 22-emotion classification (deterministic)
-            ├── PAD evolution (pleasure-arousal-dominance)
-            ├── IPC state machine (agency/communion)
-            ├── Dynamic tone (continuous PAD→tone + OCEAN modulation)
-            ├── OCEAN drift (every 10 turns, max 0.005/step)
-            └── Reflection tree (importance-threshold triggered)
+MindEngine (pure computation, zero framework dependency)
+  ├── OCC 22-emotion classification (deterministic)
+  ├── PAD evolution (pleasure-arousal-dominance)
+  ├── IPC state machine (agency/communion)
+  ├── Dynamic tone (continuous PAD→tone + OCEAN modulation)
+  ├── OCEAN drift (every 10 turns, max 0.005/step)
+  ├── Reflection tree (importance-threshold triggered)
+  └── idle_tick (PAD spring-restore toward baseline, spring_k=0.01)
 ```
 
 ### Request lifecycle
+
+**Direct mode** (unchanged):
 1. CLI calls `agent.ainvoke({"messages": [SystemMessage(fragment), HumanMessage(msg)]}, config)` with thread_id
 2. LangGraph checkpoint loads conversation state
-3. deepagents middleware pipeline:
-   - Built-in: TodoList, Filesystem, SubAgent, Summarization
-   - **SummarizationToolMiddleware**: optional `compact_conversation` tool
-4. LLM called with all tools available (MCP)
+3. deepagents middleware pipeline
+4. LLM called with all tools available
 5. Tool calls executed, response extracted
 6. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
 7. State checkpointed by LangGraph
+
+**Gateway mode** (WebSocket, text-level forwarding):
+1. Client sends `{"type": "chat", "payload": {"text": "..."}}` via WebSocket
+2. GatewayServer parses frame → MessageRouter.route()
+3. `handle_chat`: get_prompt_fragment() → agent.ainvoke() → extract AIMessage → MindEngine.process_event()
+4. Response `{"type": "chat_response", "payload": {"text": "...", "tone": {...}}}` sent back
+5. BackgroundRunner maintains independent life rhythm: PAD idle drift, diary scheduling, memory decay
 
 ### Modules at a glance
 
 | Module | Role | Key detail |
 |--------|------|------------|
-| `main.py` | Assembly | Wires model + tools + middleware + MindEngine + CLI |
-| `lingya/cli.py` | Terminal UI | Rich-based, `/sessions` `/new` `/switch` `/memories` `/diary` |
+| `main.py` | Assembly | Wires model + tools + middleware + MindEngine; 3 entry points: --daemon / start / default |
+| `lingya/cli.py` | Terminal UI | Rich-based, dual mode: direct (`run()`) + WebSocket (`run_ws()`) |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
-| `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection |
-| `lingya/memory/` | Memory | ChromaDB-backed semantic memory, importance-weighted, reflection tree |
+| `lingya/gateway/` | Multi-entry | Daemon, WS server (RFC 6455), message router, client, protocol, BackgroundRunner |
+| `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection → idle_tick |
+| `lingya/memory/` | Memory | ChromaDB-backed, importance-weighted, three-level decay (retrieval_weight), recover |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, tables: conversations, turns, mind_state |
 | `lingya/diary.py` | Diary | Markdown diary generation in LingYa's voice, one per day |
 | `lingya/reflection.py` | Opening | Generates context-aware opening line for returning users |

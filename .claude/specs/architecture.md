@@ -1,9 +1,9 @@
-# Architecture Spec (2026-06-01)
+# Architecture Spec (2026-06-01, v0.6)
 
 ## File Tree
 
 ```
-main.py                    # Entry point: loads .env, wires model + agent + mind engine + CLI
+main.py                    # Entry point: 3 modes (--daemon / start / default)
 config.yaml                # Runtime config (safe to commit)
 
 agent_config.yaml          # Mind config: identity, OCEAN, tone_matrix, behavior_guardrails
@@ -11,18 +11,26 @@ agent_config.example.yaml  # Template for new setups
 
 lingya/
 ├── __init__.py
-├── cli.py                 # LingYaCLI — Rich interactive terminal loop + /commands
+├── cli.py                 # LingYaCLI — Rich terminal loop, dual mode: direct + WebSocket
 ├── config.py              # Pydantic models: Config, LLMConfig + YAML loader
 ├── diary.py               # Diary generation: prompt, format, save/list/read Markdown diaries
 ├── reflection.py          # Opening-line generation for returning users
+├── gateway/
+│   ├── __init__.py        # Exports GatewayDaemon, GatewayServer, MessageRouter, GatewayClient
+│   ├── daemon.py          # GatewayDaemon: PID file, MindEngine singleton, agent, BackgroundRunner lifecycle
+│   ├── server.py          # GatewayServer: asyncio WebSocket (RFC 6455), zero dependencies
+│   ├── router.py          # MessageRouter: dict-in/dict-out, mind/diary/memory/chat routes
+│   ├── client.py          # GatewayClient: asyncio WebSocket client for CLI
+│   ├── protocol.py        # Shared WS protocol: frame encode/decode, handshake helpers
+│   └── background.py      # BackgroundRunner: PAD idle drift + diary scheduler + memory decay
 ├── memory/
 │   ├── __init__.py        # Exports MemoryStore, EnhancedMemoryStore
-│   ├── store.py           # ChromaDB PersistentClient, importance scoring, weighted search
+│   ├── store.py           # ChromaDB PersistentClient, importance scoring, weighted search, decay
 │   └── reflection.py      # Reflection tree: importance-threshold → self-notion extraction
 ├── mind/
 │   ├── __init__.py        # Exports MindEngine, MindConfig, MindState, PADPoint, etc.
 │   ├── config.py          # Pydantic models: MindConfig, BigFiveTraits, IdentityAnchor, ToneMatrix
-│   ├── engine.py          # MindEngine: per-turn pipeline (OCC+IPC → PAD → tone → reflection → drift)
+│   ├── engine.py          # MindEngine: per-turn pipeline + idle_tick (PAD drift)
 │   ├── state.py           # MindState, PADPoint — fully serializable personality state
 │   ├── affect.py          # OCC 22-emotion decision tree, PAD evolution, OCEAN→PAD baseline, OCEAN drift
 │   ├── dynamics.py        # IPC dual-axis state machine (agency/communion)
@@ -58,9 +66,16 @@ tests/
 ## Dependency Graph
 
 ```
-main.py → config, cli, memory, mind/engine, mind/config, storage/db
+main.py → config, cli, memory, mind/engine, mind/config, storage/db, gateway/daemon, gateway/client
 
-cli.py → storage/db, reflection, diary, mind/config
+cli.py → storage/db, reflection, diary, mind/config, gateway/client
+
+gateway/daemon.py → gateway/server, gateway/router, gateway/background, mind/engine, mind/config, memory/store, storage/db
+gateway/server.py → gateway/protocol, gateway/router
+gateway/router.py → mind/engine, memory/store, storage/db, diary
+gateway/client.py → gateway/protocol
+gateway/background.py → mind/engine, storage/db, diary
+gateway/protocol.py → (stdlib only)
 
 memory/store.py → (chromadb)
 memory/reflection.py → memory/store.py
@@ -135,6 +150,7 @@ The system prompt has two parts:
 
 ### Request Lifecycle (deepagents)
 
+**Direct mode** (unchanged from v0.5):
 ```
 1. CLI calls agent.ainvoke({"messages": [SystemMessage(fragment), HumanMessage(msg)]}, config)
 2. LangGraph checkpoint loads conversation state by thread_id
@@ -151,10 +167,27 @@ The system prompt has two parts:
 8. State checkpointed by LangGraph
 ```
 
+**Gateway mode** (v0.6, WebSocket text-level forwarding):
+```
+1. Client sends {"type": "chat", "payload": {"text": "..."}} via WebSocket
+2. GatewayServer parses WS frame → MessageRouter.route()
+3. handle_chat:
+   a. get_prompt_fragment() → SystemMessage
+   b. agent.ainvoke({"messages": [SystemMessage(fragment), HumanMessage(text)]}, config)
+   c. Extract last AIMessage
+   d. MindEngine.process_event() + check_response_alignment()
+4. Response {"type": "chat_response", "payload": {"text": "...", "tone": {...}}} sent back
+
+Idle rhythm (BackgroundRunner, independent of user interaction):
+  - Every 60s: engine.idle_tick() — PAD spring-restore toward OCEAN baseline (spring_k=0.01)
+  - Every 1h: diary scheduler — check if diary is due, generate if so
+  - Every 24h: memory decay — apply three-level retrieval_weight decay
+```
+
 ### Persistence
 
 - **SQLite** (aiosqlite): conversations, turns, mind_state tables. MindState serialized as JSON in a singleton row.
-- **ChromaDB**: semantic memory vector store with importance-weighted retrieval.
+- **ChromaDB**: semantic memory vector store with importance-weighted retrieval. v0.6 adds `retrieval_weight` (separate from `importance`) with three-level linear decay: critical (>0.8) locked, normal (0.3-0.8) 180-day linear, micro (<0.3) 30-day archive + 90-day hard delete.
 - **Diary**: Markdown files under `data/diary/`, one per day.
 
 ## Known Gaps
@@ -165,3 +198,5 @@ The system prompt has two parts:
 | Embedding fn | `MindEngine.check_response_alignment()` needs an embedding function to enable identity guard; currently always returns True |
 | Belief update | `belief.py` is implemented but not yet wired into the main pipeline |
 | Last-mile differentiation | Engine produces directional tone Δ (7-9 warmth points) between A=10/A=90 configs, but the difference in final Chinese text is too subtle for reliable LLM-judge classification (pairwise accuracy ~40-60%). Prompt-based instruction injection may have a ceiling — system-prompt-level style injection or structural output constraints could be explored. |
+| Web UI | Gateway protocol is stable; Web UI not implemented (v0.7+). Chat works via `lingya start` (CLI WS client) |
+| Multi-session WS | Gateway uses single `ws-default` thread_id for all WS chat connections. Per-client session isolation not yet implemented |
