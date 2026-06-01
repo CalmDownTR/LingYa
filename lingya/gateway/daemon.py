@@ -15,8 +15,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import SecretStr
+
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+from deepagents.middleware.summarization import create_summarization_tool_middleware
 
 from lingya.config import Config
 from lingya.gateway.router import MessageRouter
@@ -56,6 +62,8 @@ class GatewayDaemon:
         self._db: Database | None = None
         self._model: ChatOpenAI | None = None
         self._memory: EnhancedMemoryStore | None = None
+        self._agent: object | None = None
+        self._checkpointer: AsyncSqliteSaver | None = None
         self._ws_server: GatewayServer | None = None
         self._bg_runner: BackgroundRunner | None = None
 
@@ -78,6 +86,7 @@ class GatewayDaemon:
         self._init_model()
         self._init_memory()
         await self._init_engine()
+        await self._init_agent()
         self._register_signal_handlers()
 
         # Create router and WebSocket server
@@ -86,6 +95,7 @@ class GatewayDaemon:
             memory=self._memory,
             db=self._db,
             data_dir=self.config.data_dir,
+            agent=self._agent,
         )
         self._ws_server = GatewayServer("0.0.0.0", self.port, router)
         await self._ws_server.start()
@@ -129,6 +139,9 @@ class GatewayDaemon:
         """
         if self._engine is not None and self._db is not None:
             await self._engine.save_state(self._db)
+
+        if self._checkpointer is not None:
+            await self._checkpointer.__aexit__(None, None, None)
 
         if self._db is not None:
             await self._db.close()
@@ -212,6 +225,74 @@ class GatewayDaemon:
 
         # Pre-build the static prompt so it's available to clients
         self._static_prompt = build_static_prompt(self.mind_config)
+
+    async def _init_agent(self) -> None:
+        """Create the deep agent with model, tools, middleware, and checkpointer.
+
+        Called after _init_engine() so memory and static prompt are available.
+        """
+        # 1. Checkpointer — manually manage the async context manager lifecycle
+        checkpointer = AsyncSqliteSaver.from_conn_string(self.config.db_path)
+        await checkpointer.__aenter__()
+        await checkpointer.setup()
+        self._checkpointer = checkpointer
+
+        # 2. Backend
+        backend = StateBackend()
+
+        # 3. Memory tools (same as main.py)
+        @tool
+        def memory_store(text: str) -> str:
+            """Remember important information about the user.
+
+            Use this tool when the user shares personal preferences, identity,
+            emotional states, or context useful for future interactions.
+            Examples: "I like rainy days", "I'm afraid of loneliness",
+            "I'm a freelancer".
+
+            Do NOT use for transient information (e.g. "I'm running late"),
+            one-time tasks, small talk, or credentials/API keys.
+            """
+            return self._memory.store(text)
+
+        @tool
+        def memory_search(query: str) -> str:
+            """Search for prior memories about the user.
+
+            Use this tool when the user asks "do you remember...", or when you
+            need to recall context from past conversations to answer accurately.
+            Returns matching memories with their text content.
+            """
+            results = self._memory.search(query)
+            if not results:
+                return "(No matching memories found)"
+            lines = []
+            for r in results:
+                lines.append(f"[{r['id']}] {r['text']}")
+            return "\n".join(lines)
+
+        # 4. MCP tools (optional)
+        mcp_tools: list = []
+        try:
+            from langchain_mcp_adapters.client import MultiServerMCPClient
+            # If MCP servers are configured, connect and discover tools
+            # mcp_client = MultiServerMCPClient({...})  # TODO: config-driven
+            # mcp_tools = await mcp_client.get_tools()
+            pass
+        except Exception:
+            pass
+
+        # 5. Agent
+        self._agent = create_deep_agent(
+            model=self._model,
+            tools=[*mcp_tools, memory_store, memory_search],
+            middleware=[
+                create_summarization_tool_middleware(self._model, backend=backend),
+            ],
+            system_prompt=self._static_prompt,
+            backend=backend,
+            checkpointer=checkpointer,
+        )
 
     def _register_signal_handlers(self) -> None:
         """Register SIGTERM and SIGINT handlers for graceful shutdown.

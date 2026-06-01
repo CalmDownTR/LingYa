@@ -63,6 +63,8 @@ class TestGatewayDaemonInit:
         assert d._db is None
         assert d._model is None
         assert d._memory is None
+        assert d._agent is None
+        assert d._checkpointer is None
 
     def test_init_default_pid_file(self, config, mind_config):
         from lingya.gateway.daemon import GatewayDaemon
@@ -128,6 +130,7 @@ class TestPidFileLifecycle:
              patch.object(daemon, "_init_model", MagicMock()), \
              patch.object(daemon, "_init_memory", MagicMock()), \
              patch.object(daemon, "_init_engine", AsyncMock()), \
+             patch.object(daemon, "_init_agent", AsyncMock()), \
              patch.object(daemon, "_register_signal_handlers", MagicMock()), \
              patch("builtins.print"):
 
@@ -219,6 +222,9 @@ class TestPidFileLifecycle:
         async def mock_init_engine():
             call_order.append("engine")
 
+        async def mock_init_agent():
+            call_order.append("agent")
+
         def mock_register_signals():
             call_order.append("signals")
 
@@ -226,6 +232,7 @@ class TestPidFileLifecycle:
              patch.object(daemon, "_init_model", mock_init_model), \
              patch.object(daemon, "_init_memory", mock_init_memory), \
              patch.object(daemon, "_init_engine", mock_init_engine), \
+             patch.object(daemon, "_init_agent", mock_init_agent), \
              patch.object(daemon, "_register_signal_handlers", mock_register_signals), \
              patch("builtins.print"):
 
@@ -237,5 +244,5 @@ class TestPidFileLifecycle:
             await daemon.start()
 
         # PID file write happens first (before init methods)
-        # Then init sequence: db -> model -> memory -> engine -> signals
-        assert call_order == ["db", "model", "memory", "engine", "signals"]
+        # Then init sequence: db -> model -> memory -> engine -> agent -> signals
+        assert call_order == ["db", "model", "memory", "engine", "agent", "signals"]

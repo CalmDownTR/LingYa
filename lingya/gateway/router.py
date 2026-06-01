@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
 
 class MessageRouter:
     """Routes messages to handlers. Pure dict-in/dict-out."""
@@ -19,11 +21,15 @@ class MessageRouter:
         memory: Any,  # EnhancedMemoryStore
         db: Any,  # Database
         data_dir: str,
+        agent: Any = None,  # deep agent (create_deep_agent)
+        thread_id: str = "ws-default",
     ) -> None:
         self._engine = engine
         self._memory = memory
         self._db = db
         self._data_dir = data_dir
+        self._agent = agent
+        self._thread_id = thread_id
 
     async def route(self, message: dict) -> dict:
         """Route a message and return a response dict.
@@ -166,8 +172,53 @@ class MessageRouter:
         }
 
     async def _handle_chat(self, payload: dict) -> dict:
-        """Chat placeholder — returns 'not implemented' for now (Phase B)."""
+        """Process a chat message through the agent + mind engine pipeline."""
+        text = payload.get("text", "")
+        if not text:
+            return {"type": "error", "payload": {"message": "Empty message"}}
+
+        if self._agent is None:
+            return {
+                "type": "error",
+                "payload": {"message": "Agent not initialized"},
+            }
+
+        # 1. Get dynamic tone fragment from engine
+        fragment = self._engine.get_prompt_fragment()
+        messages: list = [HumanMessage(content=text)]
+        if fragment:
+            messages.insert(0, SystemMessage(content=fragment))
+
+        # 2. Invoke agent
+        try:
+            result = await self._agent.ainvoke(
+                {"messages": messages},
+                {"configurable": {"thread_id": self._thread_id}},
+            )
+        except Exception as e:
+            return {"type": "error", "payload": {"message": str(e)}}
+
+        # 3. Extract response text
+        msgs = result.get("messages", [])
+        ais = [m for m in msgs if isinstance(m, AIMessage)]
+        response_text = ais[-1].text if ais else ""
+
+        # 4. Process through MindEngine (same as CLI does)
+        await self._engine.process_event({
+            "event_type": "outcome",
+            "valence": "neutral",
+            "focus": "self",
+            "description": text,
+            "content": text,
+        })
+        if response_text:
+            await self._engine.check_response_alignment(response_text)
+
+        # 5. Return response with tone
         return {
-            "type": "error",
-            "payload": {"message": "Chat not yet implemented"},
+            "type": "chat_response",
+            "payload": {
+                "text": response_text,
+                "tone": self._engine.get_tone_params(),
+            },
         }

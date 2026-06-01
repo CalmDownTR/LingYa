@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -42,6 +42,15 @@ def mock_engine():
         "humor": 0.3,
     }
 
+    # Prompt fragment
+    engine.get_prompt_fragment.return_value = (
+        "[本次回复的语气指令]\nwarmth=high\nformality=mid\n"
+    )
+
+    # Async methods
+    engine.process_event = AsyncMock()
+    engine.check_response_alignment = AsyncMock()
+
     # OCEAN
     engine.state.current_ocean.openness = 0.6
     engine.state.current_ocean.conscientiousness = 0.7
@@ -77,10 +86,27 @@ def mock_db():
 
 
 @pytest.fixture
-def router(mock_engine, mock_memory, mock_db, tmp_path):
-    """MessageRouter with mocked dependencies."""
+def mock_agent():
+    """Mock deep agent with controlled responses."""
+    from langchain_core.messages import AIMessage
+
+    agent = MagicMock()
+    agent.ainvoke = AsyncMock()
+    return agent
+
+
+@pytest.fixture
+def router(mock_engine, mock_memory, mock_db, mock_agent, tmp_path):
+    """MessageRouter with mocked dependencies, including agent."""
     data_dir = str(tmp_path / "data")
-    return MessageRouter(mock_engine, mock_memory, mock_db, data_dir)
+    return MessageRouter(mock_engine, mock_memory, mock_db, data_dir, agent=mock_agent)
+
+
+@pytest.fixture
+def router_no_agent(mock_engine, mock_memory, mock_db, tmp_path):
+    """MessageRouter without agent (backward compat / error case)."""
+    data_dir = str(tmp_path / "data")
+    return MessageRouter(mock_engine, mock_memory, mock_db, data_dir, agent=None)
 
 
 # ── Ping tests ──────────────────────────────────────────────────────
@@ -354,21 +380,112 @@ class TestMemory:
 
 @pytest.mark.asyncio
 class TestChat:
-    async def test_chat_returns_not_implemented(self, router):
+    async def test_chat_empty_text_returns_error(self, router):
+        """Empty message text returns an error."""
+        result = await router.route(
+            {"type": "chat", "payload": {"text": ""}}
+        )
+
+        assert result["type"] == "error"
+        assert "Empty message" in result["payload"]["message"]
+
+    async def test_chat_no_text_returns_error(self, router):
+        """Missing text field returns an error."""
+        result = await router.route(
+            {"type": "chat", "payload": {}}
+        )
+
+        assert result["type"] == "error"
+        assert "Empty message" in result["payload"]["message"]
+
+    async def test_chat_no_agent_returns_error(self, router_no_agent):
+        """Router without agent returns an error."""
+        result = await router_no_agent.route(
+            {"type": "chat", "payload": {"text": "Hello"}}
+        )
+
+        assert result["type"] == "error"
+        assert "Agent not initialized" in result["payload"]["message"]
+
+    async def test_chat_returns_response_with_tone(self, router, mock_agent, mock_engine):
+        """Chat returns response text + tone params and processes through engine."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        # Simulate agent response
+        mock_agent.ainvoke.return_value = {
+            "messages": [AIMessage(content="Hello! How can I help?")],
+        }
+
+        result = await router.route(
+            {"type": "chat", "payload": {"text": "Hi there"}}
+        )
+
+        # Verify response type
+        assert result["type"] == "chat_response"
+        assert result["payload"]["text"] == "Hello! How can I help?"
+        assert result["payload"]["tone"] == {
+            "warmth": 60,
+            "formality": 50,
+            "humor": 0.3,
+        }
+
+        # Verify agent was called with correct messages
+        mock_agent.ainvoke.assert_called_once()
+        call_args = mock_agent.ainvoke.call_args
+        messages = call_args[0][0]["messages"]
+        thread_config = call_args[0][1]
+        assert len(messages) >= 1
+        assert isinstance(messages[-1], HumanMessage)
+        assert messages[-1].content == "Hi there"
+        assert thread_config["configurable"]["thread_id"] == "ws-default"
+
+        # Verify MindEngine callbacks
+        mock_engine.process_event.assert_called_once()
+        mock_engine.check_response_alignment.assert_called_once_with(
+            "Hello! How can I help?"
+        )
+
+    async def test_chat_without_fragment(self, router, mock_agent, mock_engine):
+        """Chat works when get_prompt_fragment returns empty string."""
+        from langchain_core.messages import AIMessage
+
+        mock_engine.get_prompt_fragment.return_value = ""
+        mock_agent.ainvoke.return_value = {
+            "messages": [AIMessage(content="Hey!")],
+        }
+
+        result = await router.route(
+            {"type": "chat", "payload": {"text": "Hello"}}
+        )
+
+        assert result["type"] == "chat_response"
+        assert result["payload"]["text"] == "Hey!"
+
+    async def test_chat_agent_error_returned_as_error(self, router, mock_agent):
+        """Agent exception is caught and returned as error response."""
+        mock_agent.ainvoke.side_effect = RuntimeError("LLM timeout")
+
         result = await router.route(
             {"type": "chat", "payload": {"text": "Hello"}}
         )
 
         assert result["type"] == "error"
-        assert "not yet implemented" in result["payload"]["message"]
+        assert "LLM timeout" in result["payload"]["message"]
 
-    async def test_chat_ignores_payload(self, router):
+    async def test_chat_with_extra_payload_fields(self, router, mock_agent):
+        """Extra payload fields are ignored, only text is used."""
+        from langchain_core.messages import AIMessage
+
+        mock_agent.ainvoke.return_value = {
+            "messages": [AIMessage(content="Response")],
+        }
+
         result = await router.route(
             {"type": "chat", "payload": {"text": "anything", "extra": 123}}
         )
 
-        assert result["type"] == "error"
-        assert "not yet implemented" in result["payload"]["message"]
+        assert result["type"] == "chat_response"
+        assert result["payload"]["text"] == "Response"
 
 
 # ── Error handling tests ────────────────────────────────────────────
