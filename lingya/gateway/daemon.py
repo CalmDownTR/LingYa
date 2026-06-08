@@ -64,6 +64,7 @@ class GatewayDaemon:
         self._memory: EnhancedMemoryStore | None = None
         self._agent: object | None = None
         self._checkpointer: AsyncSqliteSaver | None = None
+        self._checkpointer_ctx: object | None = None
         self._ws_server: GatewayServer | None = None
         self._bg_runner: BackgroundRunner | None = None
 
@@ -72,16 +73,18 @@ class GatewayDaemon:
     async def start(self) -> None:
         """Full startup sequence.
 
-        1. Write PID file
-        2. Create Database, initialize
-        3. Create ChatOpenAI model
-        4. Create EnhancedMemoryStore, warmup
-        5. Create MindEngine, set_db, load_state
+        1. Create Database, initialize
+        2. Create ChatOpenAI model
+        3. Create EnhancedMemoryStore, warmup
+        4. Create MindEngine, set_db, load_state
+        5. Create deep agent with tools + middleware + checkpointer
         6. Register signal handlers (SIGTERM, SIGINT)
-        7. Print startup message
-        8. Keep running (await shutdown event)
+        7. Start WebSocket server
+        8. Write PID file (only after server is listening — clients use as readiness signal)
+        9. Start BackgroundRunner
+        10. Print startup message
+        11. Keep running (await shutdown event)
         """
-        self._write_pid_file()
         await self._init_database()
         self._init_model()
         self._init_memory()
@@ -99,6 +102,9 @@ class GatewayDaemon:
         )
         self._ws_server = GatewayServer("0.0.0.0", self.port, router)
         await self._ws_server.start()
+
+        # Write PID file AFTER server is listening — clients use it as readiness signal
+        self._write_pid_file()
 
         # Start background runner (heartbeat + diary scheduler)
         # Only start if all dependencies are initialized (they always are in
@@ -141,8 +147,8 @@ class GatewayDaemon:
         if self._engine is not None and self._db is not None:
             await self._engine.save_state(self._db)
 
-        if self._checkpointer is not None:
-            await self._checkpointer.__aexit__(None, None, None)
+        if self._checkpointer_ctx is not None:
+            await self._checkpointer_ctx.__aexit__(None, None, None)
 
         if self._db is not None:
             await self._db.close()
@@ -232,9 +238,10 @@ class GatewayDaemon:
 
         Called after _init_engine() so memory and static prompt are available.
         """
-        # 1. Checkpointer — manually manage the async context manager lifecycle
-        checkpointer = AsyncSqliteSaver.from_conn_string(self.config.db_path)
-        await checkpointer.__aenter__()
+        # 1. Checkpointer — manually manage the async context manager lifecycle.
+        #    from_conn_string returns an async generator ctx; __aenter__ yields the saver.
+        self._checkpointer_ctx = AsyncSqliteSaver.from_conn_string(self.config.db_path)
+        checkpointer = await self._checkpointer_ctx.__aenter__()
         await checkpointer.setup()
         self._checkpointer = checkpointer
 

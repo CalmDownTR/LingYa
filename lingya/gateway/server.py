@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 from lingya.gateway.protocol import (
@@ -87,12 +88,20 @@ class GatewayServer:
                 elif opcode == OP_PING:
                     await _send_frame(writer, OP_PONG, payload)
                 elif opcode == OP_TEXT:
+                    t_ws = time.monotonic()
                     try:
                         message = json.loads(payload.decode("utf-8"))
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         # Malformed message — ignore, don't crash the connection
                         continue
                     response = await self._router.route(message)
+                    # Inject ws_hop_ms into chat_response meta
+                    if response.get("type") == "chat_response":
+                        ws_hop_ms = round((time.monotonic() - t_ws) * 1000, 1)
+                        response.setdefault("payload", {})["meta"] = {
+                            **(response["payload"].get("meta", {})),
+                            "ws_hop_ms": ws_hop_ms,
+                        }
                     response_bytes = json.dumps(
                         response, ensure_ascii=False, default=str
                     ).encode("utf-8")

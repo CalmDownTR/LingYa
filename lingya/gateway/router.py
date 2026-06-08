@@ -5,6 +5,8 @@ Does NOT know about WebSocket. Testable without network.
 
 from __future__ import annotations
 
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,7 @@ class MessageRouter:
         self._data_dir = data_dir
         self._agent = agent
         self._thread_id = thread_id
+        self._route_timings: deque[dict[str, float]] = deque(maxlen=200)
 
     async def route(self, message: dict) -> dict:
         """Route a message and return a response dict.
@@ -47,6 +50,7 @@ class MessageRouter:
             "diary": self._handle_diary,
             "memory": self._handle_memory,
             "chat": self._handle_chat,
+            "stats": self._handle_stats,
         }
 
         handler = handlers.get(msg_type)
@@ -56,10 +60,14 @@ class MessageRouter:
                 "payload": {"message": f"Unknown message type: {msg_type}"},
             }
 
+        t0 = time.monotonic()
         try:
-            return await handler(payload)
+            response = await handler(payload)
         except Exception as e:
-            return {"type": "error", "payload": {"message": str(e)}}
+            response = {"type": "error", "payload": {"message": str(e)}}
+        route_ms = (time.monotonic() - t0) * 1000
+        self._route_timings.append({"type": msg_type, "route_ms": round(route_ms, 1)})
+        return response
 
     # ── Route handlers ──────────────────────────────────────────────
 
@@ -68,6 +76,30 @@ class MessageRouter:
         return {
             "type": "pong",
             "payload": {"timestamp": datetime.now(timezone.utc).isoformat()},
+        }
+
+    async def _handle_stats(self, payload: dict) -> dict:
+        """Return engine pipeline stats + route dispatch stats."""
+        engine_stats = self._engine.get_stats()
+        route_values = [t["route_ms"] for t in self._route_timings]
+        route_stats = {}
+        if route_values:
+            sorted_vals = sorted(route_values)
+            n = len(sorted_vals)
+            route_stats = {
+                "p50": sorted_vals[int(n * 0.5)],
+                "p95": sorted_vals[min(int(n * 0.95), n - 1)],
+                "avg": round(sum(sorted_vals) / n, 1),
+                "min": sorted_vals[0],
+                "max": sorted_vals[-1],
+                "count": n,
+            }
+        return {
+            "type": "stats_response",
+            "payload": {
+                "engine": engine_stats,
+                "route_dispatch": route_stats,
+            },
         }
 
     async def _handle_mind(self, payload: dict) -> dict:
@@ -221,6 +253,7 @@ class MessageRouter:
         response_text = ais[-1].text if ais else ""
 
         # 4. Process through MindEngine (same as CLI does)
+        t_engine = time.monotonic()
         await self._engine.process_event({
             "event_type": "outcome",
             "valence": "neutral",
@@ -228,14 +261,16 @@ class MessageRouter:
             "description": text,
             "content": text,
         })
+        engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
         if response_text:
             await self._engine.check_response_alignment(response_text)
 
-        # 5. Return response with tone
+        # 5. Return response with tone + meta
         return {
             "type": "chat_response",
             "payload": {
                 "text": response_text,
                 "tone": self._engine.get_tone_params(),
+                "meta": {"engine_ms": engine_ms},
             },
         }

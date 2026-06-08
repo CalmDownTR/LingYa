@@ -121,31 +121,41 @@ class TestIsRunning:
 
 @pytest.mark.asyncio
 class TestPidFileLifecycle:
-    async def test_pid_file_written_on_start(self, daemon, tmp_path):
-        """start() writes the PID file with the current process PID."""
-        assert not os.path.exists(daemon.pid_file)
+    async def test_pid_file_written_after_server_ready(self, daemon, tmp_path):
+        """PID file is written only after WebSocket server is listening."""
+        mock_ws_server = AsyncMock()
+        mock_ws_server.start = AsyncMock()
 
-        # Mock all init methods so start() doesn't do real work
+        # Track whether server.start() was called before _write_pid_file
+        events: list[str] = []
+
+        original_write_pid = daemon._write_pid_file
+        def tracking_write_pid():
+            events.append("pid")
+            original_write_pid()
+
+        async def tracking_server_start():
+            events.append("server_start")
+            # Also trigger shutdown so start() unblocks quickly
+            daemon._shutdown_event.set()
+
+        mock_ws_server.start = tracking_server_start
+        daemon._write_pid_file = tracking_write_pid
+
         with patch.object(daemon, "_init_database", AsyncMock()), \
              patch.object(daemon, "_init_model", MagicMock()), \
              patch.object(daemon, "_init_memory", MagicMock()), \
              patch.object(daemon, "_init_engine", AsyncMock()), \
              patch.object(daemon, "_init_agent", AsyncMock()), \
              patch.object(daemon, "_register_signal_handlers", MagicMock()), \
+             patch("lingya.gateway.daemon.GatewayServer", return_value=mock_ws_server), \
              patch("builtins.print"):
 
-            # Trigger shutdown event shortly after start to unblock
-            async def trigger_shutdown():
-                await asyncio.sleep(0.01)
-                daemon._shutdown_event.set()
-
-            asyncio.create_task(trigger_shutdown())
             await daemon.start()
 
-            # PID file should exist
-            assert os.path.exists(daemon.pid_file)
-            content = Path(daemon.pid_file).read_text().strip()
-            assert content == str(os.getpid())
+            # Server started BEFORE PID file was written
+            assert events == ["server_start", "pid"], \
+                f"Expected ['server_start', 'pid'] but got {events}"
 
     async def test_pid_file_removed_on_shutdown(self, daemon, tmp_path):
         """shutdown() removes the PID file."""
@@ -206,9 +216,8 @@ class TestPidFileLifecycle:
         assert not os.path.exists(daemon.pid_file)
 
     async def test_start_full_sequence_order(self, daemon):
-        """Verify start() calls init methods in correct order."""
-        # Track call order
-        call_order = []
+        """Verify start() calls init methods and server in correct order."""
+        call_order: list[str] = []
 
         async def mock_init_db():
             call_order.append("db")
@@ -228,21 +237,36 @@ class TestPidFileLifecycle:
         def mock_register_signals():
             call_order.append("signals")
 
+        mock_ws_server = AsyncMock()
+        mock_ws_server.start = AsyncMock()
+
+        # Track server start and PID write
+        original_write_pid = daemon._write_pid_file
+        def tracking_write_pid():
+            call_order.append("pid")
+            original_write_pid()
+
+        daemon._write_pid_file = tracking_write_pid
+
+        async def tracking_server_start():
+            call_order.append("server_start")
+            daemon._shutdown_event.set()
+
+        mock_ws_server.start = tracking_server_start
+
         with patch.object(daemon, "_init_database", mock_init_db), \
              patch.object(daemon, "_init_model", mock_init_model), \
              patch.object(daemon, "_init_memory", mock_init_memory), \
              patch.object(daemon, "_init_engine", mock_init_engine), \
              patch.object(daemon, "_init_agent", mock_init_agent), \
              patch.object(daemon, "_register_signal_handlers", mock_register_signals), \
+             patch("lingya.gateway.daemon.GatewayServer", return_value=mock_ws_server), \
              patch("builtins.print"):
 
-            async def trigger_shutdown():
-                await asyncio.sleep(0.01)
-                daemon._shutdown_event.set()
-
-            asyncio.create_task(trigger_shutdown())
             await daemon.start()
 
-        # PID file write happens first (before init methods)
-        # Then init sequence: db -> model -> memory -> engine -> agent -> signals
-        assert call_order == ["db", "model", "memory", "engine", "agent", "signals"]
+        # Init sequence: db -> model -> memory -> engine -> agent -> signals -> server_start -> pid
+        assert call_order == [
+            "db", "model", "memory", "engine", "agent", "signals",
+            "server_start", "pid",
+        ]

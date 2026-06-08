@@ -40,8 +40,8 @@ class TestStartMain:
             mock_client_ctor.assert_called_once_with(port=8765)
             mock_client.connect.assert_called_once()
 
-            # CLI run_ws was called
-            mock_cli.run_ws.assert_called_once()
+            # CLI run was called
+            mock_cli.run.assert_called_once()
 
             # Client was closed after
             mock_client.close.assert_called_once()
@@ -58,6 +58,7 @@ class TestStartMain:
             return is_running_values.pop(0) if is_running_values else True
 
         mock_popen = MagicMock()
+        mock_popen.poll.return_value = None  # Process still running
         mock_cli = AsyncMock()
         mock_cli_class = MagicMock(return_value=mock_cli)
 
@@ -87,12 +88,14 @@ class TestStartMain:
 
             # Client connected and CLI ran
             mock_client.connect.assert_called_once()
-            mock_cli.run_ws.assert_called_once()
+            mock_cli.run.assert_called_once()
             mock_client.close.assert_called_once()
 
     async def test_daemon_fails_to_start_times_out(self):
         """When daemon never starts, timeout and return without client connect."""
         mock_client_ctor = MagicMock()
+        mock_popen = MagicMock()
+        mock_popen.poll.return_value = None  # Process still running, never exits
 
         with patch(
             "lingya.gateway.client.GatewayClient", mock_client_ctor
@@ -101,30 +104,64 @@ class TestStartMain:
             "lingya.gateway.daemon.GatewayDaemon.is_running", return_value=False
         ) as mock_is_running, \
              patch(
-            "subprocess.Popen"
+            "subprocess.Popen", return_value=mock_popen
         ) as mock_popen_class, \
              patch(
             "main.LingYaCLI"
         ) as mock_cli_class:
 
-            # Override the sleep to be instant so the test doesn't take 5 seconds
+            # Override the sleep to be instant so the test doesn't take 10 seconds
             async def instant_sleep(duration):
                 pass
 
             with patch("asyncio.sleep", instant_sleep):
                 await start_main()
 
-            # is_running was checked at least 50 times (initial check + timeout loop)
-            assert mock_is_running.call_count >= 50
+            # is_running was checked at least 101 times (1 initial + 100 loop)
+            assert mock_is_running.call_count >= 101
 
             # Subprocess was spawned
             mock_popen_class.assert_called_once()
+
+            # Subprocess was killed on timeout
+            mock_popen.kill.assert_called_once()
 
             # Client was NOT created (start failed)
             mock_client_ctor.assert_not_called()
 
             # CLI was NOT created
             mock_cli_class.assert_not_called()
+
+    async def test_detects_crashed_subprocess(self):
+        """When subprocess dies during startup, read stderr and return early."""
+        mock_client_ctor = MagicMock()
+        mock_popen = MagicMock()
+        mock_popen.poll.return_value = 1  # Process exited
+        mock_popen.returncode = 1
+        mock_popen.stderr = MagicMock()
+        mock_popen.stderr.read.return_value = b"Fake startup error"
+
+        with patch(
+            "lingya.gateway.daemon.GatewayDaemon.is_running", return_value=False
+        ), \
+             patch(
+            "subprocess.Popen", return_value=mock_popen
+        ) as mock_popen_class, \
+             patch(
+            "lingya.gateway.client.GatewayClient", mock_client_ctor
+        ), \
+             patch(
+            "main.LingYaCLI"
+        ), \
+             patch("builtins.print"):
+
+            with patch("asyncio.sleep", AsyncMock()):
+                await start_main()
+
+            # Subprocess was spawned
+            mock_popen_class.assert_called_once()
+            # Client was NOT created (crashed before connection)
+            mock_client_ctor.assert_not_called()
 
     async def test_client_connect_failure_handled(self):
         """When client.connect() fails, print error and return."""
@@ -153,13 +190,13 @@ class TestStartMain:
             # close was still called in finally
             mock_client.close.assert_called_once()
 
-    async def test_cli_run_ws_cleanup_on_exception(self):
-        """client.close() is called even if run_ws() raises."""
+    async def test_cli_run_cleanup_on_exception(self):
+        """client.close() is called even if run() raises."""
         mock_client = AsyncMock()
         mock_client_ctor = MagicMock(return_value=mock_client)
 
         mock_cli = AsyncMock()
-        mock_cli.run_ws.side_effect = EOFError()
+        mock_cli.run.side_effect = EOFError()
 
         with patch(
             "main.LingYaCLI", return_value=mock_cli
