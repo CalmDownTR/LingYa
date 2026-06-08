@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
+import termios
+import tty
+import unicodedata
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -14,13 +18,75 @@ class LingYaCLI:
         self._ws_client = ws_client
         self.console = Console()
 
+    @staticmethod
+    def _display_width(ch: str) -> int:
+        """Return the terminal display width of a single character.
+
+        East-Asian wide/fullwidth chars occupy 2 columns; everything else is 1.
+        """
+        eaw = unicodedata.east_asian_width(ch)
+        return 2 if eaw in ("W", "F") else 1
+
+    def _read_input(self, prompt: str) -> str:
+        """Read a line of input with manual echo and backspace handling.
+
+        Avoids display artifacts from Python's built-in input() which can
+        leave residual characters on screen after backspace, especially on
+        macOS where Python uses libedit instead of GNU readline.
+        """
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+
+            buf = b""
+            # Each entry: (character, display_width)
+            result: list[tuple[str, int]] = []
+            while True:
+                b = sys.stdin.buffer.read(1)
+                if not b:
+                    continue
+                if b in (b"\r", b"\n"):
+                    sys.stdout.write("\r\n")
+                    sys.stdout.flush()
+                    break
+                if b in (b"\x7f", b"\x08"):  # Backspace (DEL or BS)
+                    if result:
+                        _, w = result.pop()
+                        # Erase w columns: move left w, overwrite with w spaces, move left w
+                        sys.stdout.write("\b" * w + " " * w + "\b" * w)
+                        sys.stdout.flush()
+                elif b == b"\x03":  # Ctrl+C
+                    sys.stdout.write("\r\n")
+                    sys.stdout.flush()
+                    raise KeyboardInterrupt()
+                elif b == b"\x04":  # Ctrl+D
+                    raise EOFError()
+                elif b >= b"\x20":  # Printable characters
+                    buf += b
+                    try:
+                        char = buf.decode("utf-8")
+                        w = self._display_width(char)
+                        result.append((char, w))
+                        sys.stdout.write(char)
+                        sys.stdout.flush()
+                        buf = b""
+                    except UnicodeDecodeError:
+                        pass  # Need more bytes for multi-byte UTF-8 char
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+        return "".join(ch for ch, _ in result)
+
     async def run(self) -> None:
         self._print_welcome()
 
         while True:
             try:
                 self.console.print()
-                user_input = input("You: ")
+                user_input = self._read_input("You: ")
             except (KeyboardInterrupt, EOFError):
                 self.console.print("\n[dim]Goodbye.[/]")
                 return
