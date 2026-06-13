@@ -44,11 +44,19 @@ async def start_main() -> None:
     """
     from lingya.gateway.daemon import GatewayDaemon
     from lingya.gateway.client import GatewayClient
+    from lingya.gateway.server import _find_port_owner
 
     PORT = 8765
 
     # 1. Check if daemon is already running
     if not GatewayDaemon.is_running():
+        # If port is held by a stale process (PID file missing), kill it
+        stale_pid = _find_port_owner(PORT)
+        if stale_pid is not None:
+            import signal
+            import os as _os
+            _os.kill(stale_pid, signal.SIGTERM)
+
         import subprocess
 
         # Launch daemon as a subprocess using the same Python + main.py

@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
+import subprocess
 import time
 from typing import Any
 
@@ -47,10 +50,26 @@ class GatewayServer:
         self._server: asyncio.Server | None = None
 
     async def start(self) -> None:
-        """Start the asyncio WebSocket server."""
-        self._server = await asyncio.start_server(
-            self._handle_connection, self._host, self._port
-        )
+        """Start the asyncio WebSocket server.
+
+        If the port is already in use by a previous LingYa process (stale PID
+        file), the old process is killed and the server retries binding.
+        """
+        try:
+            self._server = await asyncio.start_server(
+                self._handle_connection, self._host, self._port
+            )
+        except OSError as e:
+            if e.errno != 48:  # Not "address already in use"
+                raise
+            old_pid = _find_port_owner(self._port)
+            if old_pid is None or old_pid == os.getpid():
+                raise
+            os.kill(old_pid, signal.SIGTERM)
+            await asyncio.sleep(0.5)
+            self._server = await asyncio.start_server(
+                self._handle_connection, self._host, self._port
+            )
 
     async def stop(self) -> None:
         """Stop the server gracefully."""
@@ -118,3 +137,17 @@ class GatewayServer:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+
+def _find_port_owner(port: int) -> int | None:
+    """Return the PID of the process listening on *port*, or None."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split("\n")[0])
+    except Exception:
+        pass
+    return None
