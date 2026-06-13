@@ -9,3 +9,6 @@ llm:
 db_path: ./data/lingya.db
 data_dir: ./data
 memory_path: ./data/memory
+
+otel:
+  enabled: false  # Set to true to enable OpenTelemetry tracing (console exporter)

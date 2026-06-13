@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
-from collections import deque
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lingya.mind.affect import evolve_pad, occ_ipc_process, ocean_drift, ocean_to_pad_baseline
 from lingya.mind.config import MindConfig
@@ -20,6 +18,10 @@ from lingya.mind.guard import check_reanchor, generate_reanchor_hint
 from lingya.mind.state import MindState, PADPoint
 from lingya.mind.tone import compute_dynamic_tone, detect_stage
 from lingya.memory.store import rule_based_importance
+
+if TYPE_CHECKING:
+    from lingya.events import EventBus
+    from lingya.protocols import IMemoryStore
 
 # ── Static base prompt skeleton (replaces old PromptAssembler output) ───
 
@@ -62,9 +64,11 @@ class MindEngine:
     def __init__(
         self,
         config: MindConfig,
-        memory_store,  # EnhancedMemoryStore
+        memory_store: IMemoryStore,
         llm_call: Callable[[str], Awaitable[str]],
         embedding_fn: Callable[[str], list[float]] | None = None,
+        event_bus: "EventBus | None" = None,
+        tracer: Any = None,
     ) -> None:
         self.config = config
         self.memory = memory_store
@@ -75,22 +79,19 @@ class MindEngine:
         self._current_tone = config.tone_matrix.model_copy()
         self._last_stage: str = "initial"
         self._db = None  # Set after construction for load/save
-        self._stats: deque[dict[str, float]] = deque(maxlen=200)
+        self._event_bus = event_bus
+        self._tracer = tracer
 
     # ── Public API ──────────────────────────────────────────────────
 
     async def process_event(self, event: dict[str, Any]) -> None:
         """Pipeline: OCC+IPC (1 LLM) → PAD → tone → importance (bg) → reflection → drift → save."""
-        t_total = time.monotonic()
         self.state.turn_counter += 1
 
         # 1. Merged OCC + IPC — single LLM call with 1.5s timeout, neutral fallback
-        t0 = time.monotonic()
         result = await occ_ipc_process(event, self.state.recent_emotions, self._llm_call)
-        occ_ipc_ms = (time.monotonic() - t0) * 1000
 
         # 2. Evolve PAD with OCC pull + spring toward OCEAN-derived baseline
-        t0 = time.monotonic()
         self.state.current_pad = evolve_pad(
             self.state.current_pad,
             result.pad_pull,
@@ -134,7 +135,6 @@ class MindEngine:
             self.state.current_pad, stage, self.config.tone_matrix,
             self.state.current_ocean,
         )
-        pad_tone_ms = (time.monotonic() - t0) * 1000
 
         # 5. Importance scoring — rule-based pre-score now, LLM refinement in background
         description = event.get("description", event.get("content", str(event)))
@@ -158,7 +158,7 @@ class MindEngine:
             self.state.cumulative_importance = 0.0
             self.state.reflection_threshold *= 1.1
 
-        # 7. OCEAN drift (every 10 turns, pure compute, baseline derived from OCEAN itself)
+        # 7. OCEAN drift (every 10 turns, pure compute)
         if self.state.turn_counter % 10 == 0:
             self.state.current_ocean = ocean_drift(
                 self.state.current_ocean,
@@ -166,19 +166,28 @@ class MindEngine:
             )
 
         # 8. Auto-persist
-        t0 = time.monotonic()
         if self._db is not None:
             await self.save_state(self._db)
-        save_ms = (time.monotonic() - t0) * 1000
 
-        total_ms = (time.monotonic() - t_total) * 1000
-        self._stats.append({
-            "turn": self.state.turn_counter,
-            "total_ms": round(total_ms, 1),
-            "occ_ipc_ms": round(occ_ipc_ms, 1),
-            "pad_tone_ms": round(pad_tone_ms, 1),
-            "save_ms": round(save_ms, 1),
-        })
+        # OTel span — record PAD/OCEAN/IPC/tone as attributes
+        if self._tracer is not None:
+            with self._tracer.start_as_current_span("mind.process_event") as span:
+                span.set_attribute("pad.pleasure", self.state.current_pad.pleasure)
+                span.set_attribute("pad.arousal", self.state.current_pad.arousal)
+                span.set_attribute("pad.dominance", self.state.current_pad.dominance)
+                span.set_attribute("emotion", result.emotion)
+                span.set_attribute("emotion.intensity", result.intensity)
+                span.set_attribute("ipc", self.state.ipc_state)
+                span.set_attribute("turn", self.state.turn_counter)
+
+        if self._event_bus is not None:
+            await self._event_bus.publish(
+                "mind_state_changed",
+                pad=self.state.current_pad.model_dump(),
+                emotion=self.state.recent_emotions[-1] if self.state.recent_emotions else None,
+                ipc=self.state.ipc_state,
+                tone=self._current_tone.model_dump(),
+            )
 
     async def idle_tick(self) -> None:
         """Execute one idle heartbeat tick.
@@ -214,6 +223,10 @@ class MindEngine:
         # Auto-persist
         if self._db is not None:
             await self.save_state(self._db)
+
+        if self._tracer is not None:
+            with self._tracer.start_as_current_span("mind.idle_tick") as span:
+                span.set_attribute("pad.pleasure", self.state.current_pad.pleasure)
 
     async def _deferred_importance_score(self, text: str, entry_id: str) -> None:
         """Background: score importance with LLM and update stored metadata."""
@@ -284,28 +297,6 @@ class MindEngine:
             )
             return False
         return True
-
-    def get_stats(self) -> dict[str, dict[str, float]]:
-        """Return p50/p95/avg/min/max/count for each tracked metric.
-
-        Returns empty dict if no data collected yet.
-        """
-        if not self._stats:
-            return {}
-        metrics = ["total_ms", "occ_ipc_ms", "pad_tone_ms", "save_ms"]
-        result: dict[str, dict[str, float]] = {}
-        for key in metrics:
-            values = sorted(s[key] for s in self._stats)
-            n = len(values)
-            result[key] = {
-                "p50": values[int(n * 0.5)],
-                "p95": values[int(n * 0.95)],
-                "avg": round(sum(values) / n, 1),
-                "min": values[0],
-                "max": values[-1],
-                "count": n,
-            }
-        return result
 
     # ── Persistence ─────────────────────────────────────────────────
 

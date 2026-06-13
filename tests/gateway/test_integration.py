@@ -83,13 +83,13 @@ class TestDaemonLifecycle:
         )
 
         with patch(
-            "lingya.gateway.daemon.ChatOpenAI", return_value=mock_model
+            "lingya.app.ChatOpenAI", return_value=mock_model
         ), \
              patch(
-            "lingya.gateway.daemon.create_deep_agent", return_value=MagicMock()
+            "lingya.app.create_deep_agent", return_value=MagicMock()
         ), \
              patch(
-            "lingya.gateway.daemon.create_summarization_tool_middleware",
+            "lingya.app.create_summarization_tool_middleware",
             return_value=MagicMock(),
         ):
             # Start daemon in background — it blocks on shutdown_event
@@ -178,13 +178,13 @@ class TestDaemonLifecycle:
         )
 
         with patch(
-            "lingya.gateway.daemon.ChatOpenAI", return_value=mock_model
+            "lingya.app.ChatOpenAI", return_value=mock_model
         ), \
              patch(
-            "lingya.gateway.daemon.create_deep_agent", return_value=MagicMock()
+            "lingya.app.create_deep_agent", return_value=MagicMock()
         ), \
              patch(
-            "lingya.gateway.daemon.create_summarization_tool_middleware",
+            "lingya.app.create_summarization_tool_middleware",
             return_value=MagicMock(),
         ):
             daemon_task = asyncio.create_task(daemon.start())

@@ -1,0 +1,217 @@
+"""ApplicationBuilder — assemble the LingYa application from components.
+
+Replaces the God-class GatewayDaemon assembly with a typed builder chain.
+Used by both Gateway mode (daemon) and Direct mode (CLI).
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Any, Self
+
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from pydantic import SecretStr
+
+from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+from deepagents.middleware.summarization import create_summarization_tool_middleware
+
+from lingya.config import Config
+from lingya.events import EventBus
+from lingya.memory import EnhancedMemoryStore
+from lingya.mind import MindEngine, build_static_prompt
+from lingya.mind.config import MindConfig
+from lingya.storage.db import Database
+from lingya.tools.memory_tools import create_memory_tools
+
+
+@dataclass
+class Application:
+    """Assembled LingYa application — all components wired together."""
+
+    config: Config
+    mind_config: MindConfig
+    db: Database | None
+    model: ChatOpenAI | None
+    memory: EnhancedMemoryStore | None
+    engine: MindEngine | None
+    static_prompt: str
+    tracer: Any = None
+    event_bus: EventBus | None = None
+    agent: Any = None
+    checkpointer: AsyncSqliteSaver | None = None
+    checkpointer_ctx: Any = None
+
+    async def teardown(self) -> None:
+        """Clean up all async resources."""
+        if self.checkpointer_ctx is not None:
+            await self.checkpointer_ctx.__aexit__(None, None, None)
+        if self.db is not None:
+            await self.db.close()
+
+
+class ApplicationBuilder:
+    """Typed builder for assembling a LingYa Application.
+
+    Usage::
+
+        app = await (
+            ApplicationBuilder(config, mind_config)
+            .with_database()
+            .with_model()
+            .with_memory()
+            .with_event_bus()
+            .with_engine()
+            .with_agent()
+            .build()
+        )
+    """
+
+    def __init__(self, config: Config, mind_config: MindConfig) -> None:
+        self._config = config
+        self._mind_config = mind_config
+        self._db: Database | None = None
+        self._model: ChatOpenAI | None = None
+        self._memory: EnhancedMemoryStore | None = None
+        self._engine: MindEngine | None = None
+        self._static_prompt: str = ""
+        self._event_bus: EventBus | None = None
+        self._agent: Any = None
+        self._checkpointer: AsyncSqliteSaver | None = None
+        self._checkpointer_ctx: Any = None
+        self._extra_tools: list = []
+        self._tracer: Any = None
+
+    # ── Builder steps ─────────────────────────────────────────────────
+
+    def with_observability(self) -> Self:
+        """Initialize OpenTelemetry tracing (no-op if otel.enabled=false)."""
+        from lingya.observability import init_observability
+
+        self._tracer = init_observability(self._config)
+        return self
+
+    def with_database(self) -> Self:
+        self._db = Database(self._config.db_path)
+        return self
+
+    def with_model(self) -> Self:
+        api_key = os.environ[self._config.llm.api_key_env]
+        self._model = ChatOpenAI(
+            model=self._config.llm.model,
+            api_key=SecretStr(api_key),
+            base_url=self._config.llm.api_base_url,
+            temperature=self._config.llm.temperature,
+        )
+        self._model.profile = {"max_input_tokens": self._config.llm.max_input_tokens}
+        return self
+
+    def with_memory(self) -> Self:
+        self._memory = EnhancedMemoryStore(persist_path=self._config.memory_path)
+        self._memory.warmup()
+        return self
+
+    def with_event_bus(self) -> Self:
+        self._event_bus = EventBus()
+        return self
+
+    def with_engine(self) -> Self:
+        if self._model is None:
+            raise RuntimeError(
+                "ApplicationBuilder.with_engine() requires with_model() first"
+            )
+        if self._memory is None:
+            raise RuntimeError(
+                "ApplicationBuilder.with_engine() requires with_memory() first"
+            )
+
+        async def llm_call(prompt: str) -> str:
+            result = await self._model.ainvoke([HumanMessage(content=prompt)])
+            return str(result.content) if hasattr(result, "content") else str(result)
+
+        self._engine = MindEngine(
+            config=self._mind_config,
+            memory_store=self._memory,
+            llm_call=llm_call,
+            event_bus=self._event_bus,
+            tracer=self._tracer,
+        )
+        self._static_prompt = build_static_prompt(self._mind_config)
+        return self
+
+    def with_agent(self, extra_tools: list | None = None) -> Self:
+        if self._engine is None:
+            raise RuntimeError(
+                "ApplicationBuilder.with_agent() requires with_engine() first"
+            )
+        if self._model is None:
+            raise RuntimeError(
+                "ApplicationBuilder.with_agent() requires with_model() first"
+            )
+        self._extra_tools = extra_tools or []
+
+        # Checkpointer
+        self._checkpointer_ctx = AsyncSqliteSaver.from_conn_string(self._config.db_path)
+        return self
+
+    # ── Build ─────────────────────────────────────────────────────────
+
+    async def build(self) -> Application:
+        # If db was created, initialize it
+        if self._db is not None:
+            await self._db.initialize()
+
+        # If engine was created, wire it to db and load state
+        if self._engine is not None and self._db is not None:
+            self._engine.set_db(self._db)
+            await self._engine.load_state(self._db)
+
+        # If checkpointer context was created, enter it
+        if self._checkpointer_ctx is not None:
+            checkpointer = await self._checkpointer_ctx.__aenter__()
+            await checkpointer.setup()
+            self._checkpointer = checkpointer
+
+        # If agent step was called, create the deep agent
+        if self._checkpointer is not None:
+            memory_tools = []
+            if self._memory is not None:
+                memory_tools = create_memory_tools(self._memory)
+
+            # MCP tools stub
+            mcp_tools: list = []
+            try:
+                import langchain_mcp_adapters.client  # noqa: F401
+                pass
+            except Exception:
+                pass
+
+            backend = StateBackend()
+            self._agent = create_deep_agent(
+                model=self._model,
+                tools=[*mcp_tools, *memory_tools, *self._extra_tools],
+                middleware=[
+                    create_summarization_tool_middleware(self._model, backend=backend),
+                ],
+                system_prompt=self._static_prompt,
+                backend=backend,
+                checkpointer=self._checkpointer,
+            )
+
+        return Application(
+            config=self._config,
+            mind_config=self._mind_config,
+            db=self._db,
+            model=self._model,
+            memory=self._memory,
+            engine=self._engine,
+            static_prompt=self._static_prompt,
+            tracer=self._tracer,
+            event_bus=self._event_bus,
+            agent=self._agent,
+            checkpointer=self._checkpointer,
+            checkpointer_ctx=self._checkpointer_ctx,
+        )

@@ -6,12 +6,14 @@ Does NOT know about WebSocket. Testable without network.
 from __future__ import annotations
 
 import time
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+if TYPE_CHECKING:
+    from lingya.protocols import IMemoryStore
 
 
 class MessageRouter:
@@ -20,7 +22,7 @@ class MessageRouter:
     def __init__(
         self,
         engine: Any,  # MindEngine
-        memory: Any,  # EnhancedMemoryStore
+        memory: IMemoryStore | Any,
         db: Any,  # Database
         data_dir: str,
         agent: Any = None,  # deep agent (create_deep_agent)
@@ -32,7 +34,6 @@ class MessageRouter:
         self._data_dir = data_dir
         self._agent = agent
         self._thread_id = thread_id
-        self._route_timings: deque[dict[str, float]] = deque(maxlen=200)
 
     async def route(self, message: dict) -> dict:
         """Route a message and return a response dict.
@@ -60,13 +61,10 @@ class MessageRouter:
                 "payload": {"message": f"Unknown message type: {msg_type}"},
             }
 
-        t0 = time.monotonic()
         try:
             response = await handler(payload)
         except Exception as e:
             response = {"type": "error", "payload": {"message": str(e)}}
-        route_ms = (time.monotonic() - t0) * 1000
-        self._route_timings.append({"type": msg_type, "route_ms": round(route_ms, 1)})
         return response
 
     # ── Route handlers ──────────────────────────────────────────────
@@ -79,26 +77,12 @@ class MessageRouter:
         }
 
     async def _handle_stats(self, payload: dict) -> dict:
-        """Return engine pipeline stats + route dispatch stats."""
-        engine_stats = self._engine.get_stats()
-        route_values = [t["route_ms"] for t in self._route_timings]
-        route_stats = {}
-        if route_values:
-            sorted_vals = sorted(route_values)
-            n = len(sorted_vals)
-            route_stats = {
-                "p50": sorted_vals[int(n * 0.5)],
-                "p95": sorted_vals[min(int(n * 0.95), n - 1)],
-                "avg": round(sum(sorted_vals) / n, 1),
-                "min": sorted_vals[0],
-                "max": sorted_vals[-1],
-                "count": n,
-            }
+        """Stats migrated to OpenTelemetry — return deprecation notice."""
         return {
             "type": "stats_response",
             "payload": {
-                "engine": engine_stats,
-                "route_dispatch": route_stats,
+                "deprecated": True,
+                "hint": "Stats migrated to OpenTelemetry. Set otel.enabled=true in config.yaml.",
             },
         }
 

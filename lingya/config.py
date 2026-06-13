@@ -17,8 +17,13 @@ class LLMConfig(BaseModel):
     max_input_tokens: int = 1_048_576  # DeepSeek V4 Flash 1M context window, for summarization thresholds
 
 
+class OtelConfig(BaseModel):
+    enabled: bool = False
+
+
 class Config(BaseModel):
     llm: LLMConfig = LLMConfig()
+    otel: OtelConfig = OtelConfig()
     db_path: str = "./data/lingya.db"
     memory_path: str = "./data/memory"
     data_dir: str = "./data"

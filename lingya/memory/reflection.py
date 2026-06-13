@@ -6,6 +6,10 @@ Fire-and-forget: launched via asyncio.create_task(), doesn't block user interact
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lingya.protocols import IMemoryStore
 
 REFLECTION_QUESTIONS_PROMPT = """\
 You are an agent's self-reflection module. Based on recent important memories about the user, generate 3 guiding questions for deeper self-reflection. These questions should help the agent understand the user better and form self-notions about how to interact with them.
@@ -29,7 +33,7 @@ Return 1-2 self-notions, one per line. Be specific and actionable. Do not use ma
 async def check_and_reflect(
     cumulative_importance: float,
     threshold: float,
-    memory_store,  # EnhancedMemoryStore
+    memory_store: IMemoryStore,
     llm_call: Callable[[str], Awaitable[str]],
 ) -> list[str]:
     """If cumulative importance >= threshold, run reflection tree.
