@@ -122,6 +122,8 @@ class LingYaCLI:
                 raise EOFError()
             case "/help":
                 self._show_help()
+            case "/new":
+                await self._cmd_new_session()
             case "/diary":
                 await self._cmd_diary(arg)
             case "/memories":
@@ -130,16 +132,28 @@ class LingYaCLI:
                 await self._cmd_mind(arg)
             case "/stats":
                 await self._cmd_stats()
-            case "/sessions" | "/new" | "/switch" | "/forget" | "/remember" | "/recover":
+            case "/sessions" | "/switch" | "/forget" | "/remember" | "/recover":
                 self.console.print(
-                    "[yellow]Session management is handled by the Gateway daemon. "
-                    "Not yet available via WebSocket.[/]"
+                    "[yellow]Not yet implemented.[/]"
                 )
             case _:
                 self.console.print(
                     f"[yellow]Unknown command: {command}[/]. "
                     "Type /help for available commands."
                 )
+
+    async def _cmd_new_session(self) -> None:
+        """Handle /new — start a fresh conversation session."""
+        with self.console.status("[dim]Starting new session...[/]"):
+            response = await self._ws_client.send({
+                "type": "session",
+                "payload": {"action": "new"},
+            })
+        if response.get("type") == "session_response":
+            thread_id = response.get("payload", {}).get("thread_id", "?")
+            self.console.print(f"[green]New session started[/] [dim]({thread_id})[/]")
+        else:
+            self._display_response(response)
 
     async def _cmd_diary(self, arg: str) -> None:
         """Handle /diary."""
@@ -333,6 +347,7 @@ class LingYaCLI:
 
 | Command | Description |
 |---------|-------------|
+| `/new` | Start a fresh conversation session |
 | `/diary` | Read or list LingYa's diary |
 | `/memories` | List all stored memories |
 | `/mind` | Show current mind state (PAD, OCEAN, tone) |

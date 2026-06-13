@@ -6,6 +6,7 @@ Does NOT know about WebSocket. Testable without network.
 from __future__ import annotations
 
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -51,6 +52,7 @@ class MessageRouter:
             "diary": self._handle_diary,
             "memory": self._handle_memory,
             "chat": self._handle_chat,
+            "session": self._handle_session,
             "stats": self._handle_stats,
         }
 
@@ -84,6 +86,25 @@ class MessageRouter:
                 "deprecated": True,
                 "hint": "Stats migrated to OpenTelemetry. Set otel.enabled=true in config.yaml.",
             },
+        }
+
+    async def _handle_session(self, payload: dict) -> dict:
+        """Manage conversation sessions — start new, list, or switch."""
+        action = payload.get("action", "new")
+
+        if action == "new":
+            self._thread_id = f"ws-{uuid.uuid4().hex[:8]}"
+            return {
+                "type": "session_response",
+                "payload": {
+                    "action": "new",
+                    "thread_id": self._thread_id,
+                },
+            }
+
+        return {
+            "type": "error",
+            "payload": {"message": f"Unknown session action: {action}"},
         }
 
     async def _handle_mind(self, payload: dict) -> dict:

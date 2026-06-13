@@ -547,3 +547,65 @@ class TestErrorHandling:
 
         assert result["type"] == "error"
         assert "DB connection lost" in result["payload"]["message"]
+
+
+# ── Session tests ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestSession:
+    async def test_session_new_returns_new_thread_id(self, router):
+        """Starting a new session returns a fresh thread_id."""
+        old_thread_id = router._thread_id
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "new"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["action"] == "new"
+        assert result["payload"]["thread_id"] != old_thread_id
+        assert result["payload"]["thread_id"].startswith("ws-")
+        # Router's internal state should be updated
+        assert router._thread_id == result["payload"]["thread_id"]
+
+    async def test_session_new_default_action(self, router):
+        """Default action for session is 'new'."""
+        old_thread_id = router._thread_id
+
+        result = await router.route(
+            {"type": "session", "payload": {}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["action"] == "new"
+        assert router._thread_id != old_thread_id
+
+    async def test_session_new_affects_chat_thread_id(self, router, mock_agent):
+        """After /new, subsequent chat uses the new thread_id."""
+        from langchain_core.messages import AIMessage
+
+        # Start a new session
+        session_result = await router.route(
+            {"type": "session", "payload": {"action": "new"}}
+        )
+        new_thread_id = session_result["payload"]["thread_id"]
+
+        # Chat after new session
+        mock_agent.ainvoke.return_value = {
+            "messages": [AIMessage(content="Fresh start!")],
+        }
+        await router.route({"type": "chat", "payload": {"text": "Hello"}})
+
+        # Verify agent was called with the new thread_id
+        call_args = mock_agent.ainvoke.call_args
+        assert call_args[0][1]["configurable"]["thread_id"] == new_thread_id
+
+    async def test_session_unknown_action_returns_error(self, router):
+        """Unknown session action returns an error."""
+        result = await router.route(
+            {"type": "session", "payload": {"action": "bogus"}}
+        )
+
+        assert result["type"] == "error"
+        assert "Unknown session action" in result["payload"]["message"]
