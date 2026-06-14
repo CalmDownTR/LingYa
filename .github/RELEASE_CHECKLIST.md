@@ -6,7 +6,7 @@
 - [ ] `uv run pytest` passes
 - [ ] `uv run ruff check lingya/` passes
 - [ ] `pyproject.toml` version matches the target release
-- [ ] `product/ROADMAP.md` "已完成版本" section updated
+- [ ] `product/ROADMAP.md` completed-versions section updated
 - [ ] `.claude/specs/architecture.md` synced with code changes
 - [ ] No data loss: upgrade from previous version's DB works
 
@@ -36,7 +36,7 @@ uv run pytest && uv run ruff check lingya/
 git add -A && git commit -m "chore: bump version to v0.x.y"
 
 # 5. Create annotated tag
-git tag -a v0.x.y -m "v0.x.y — <theme summary in Chinese>"
+git tag -a v0.x.y -m "v0.x.y — <theme summary>"
 
 # 6. Push code + tags
 git push origin main --follow-tags
