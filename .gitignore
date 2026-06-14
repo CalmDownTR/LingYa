@@ -21,6 +21,7 @@ product/
 # Claude Code (dev tools, not deployment)
 .claude/
 .agents/
+.github/
 skills-lock.json
 
 # CodeGraph (machine-specific index)
