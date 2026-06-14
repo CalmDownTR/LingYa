@@ -19,10 +19,9 @@ wheels/
 product/
 
 # Claude Code (dev tools, not deployment)
-.claude/*
+.claude/
 .agents/
 skills-lock.json
-!.claude/specs/
 
 # CodeGraph (machine-specific index)
 .codegraph/
