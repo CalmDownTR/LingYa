@@ -14,7 +14,6 @@ import asyncio
 import base64
 import json
 import os
-from typing import Any
 
 from lingya.gateway.protocol import (
     OP_CLOSE,

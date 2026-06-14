@@ -70,6 +70,9 @@ class TestStartMain:
             side_effect=is_running_side_effect,
         ) as mock_is_running, \
              patch(
+            "lingya.gateway.server._find_port_owner", return_value=None
+        ), \
+             patch(
             "subprocess.Popen", return_value=mock_popen
         ) as mock_popen_class, \
              patch(
@@ -81,7 +84,7 @@ class TestStartMain:
             # Daemon was not running — spawn subprocess
             assert mock_is_running.call_count >= 2
 
-            # Subprocess was spawned
+            # Subprocess was spawned (Popen called once for daemon, not for lsof)
             mock_popen_class.assert_called_once()
             call_args = mock_popen_class.call_args[0][0]
             assert "--daemon" in call_args
@@ -103,6 +106,9 @@ class TestStartMain:
              patch(
             "lingya.gateway.daemon.GatewayDaemon.is_running", return_value=False
         ) as mock_is_running, \
+             patch(
+            "lingya.gateway.server._find_port_owner", return_value=None
+        ), \
              patch(
             "subprocess.Popen", return_value=mock_popen
         ) as mock_popen_class, \
@@ -143,6 +149,9 @@ class TestStartMain:
 
         with patch(
             "lingya.gateway.daemon.GatewayDaemon.is_running", return_value=False
+        ), \
+             patch(
+            "lingya.gateway.server._find_port_owner", return_value=None
         ), \
              patch(
             "subprocess.Popen", return_value=mock_popen
