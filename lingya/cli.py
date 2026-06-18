@@ -101,14 +101,53 @@ class LingYaCLI:
                 await self._handle_chat(user_input)
 
     async def _handle_chat(self, user_input: str) -> None:
-        """Send a chat message via WebSocket and display the response."""
-        with self.console.status("[dim]Thinking...[/]"):
-            response = await self._ws_client.send({
-                "type": "chat",
-                "payload": {"text": user_input},
-            })
-        self.console.print()
-        self._display_response(response)
+        """Send a chat message via WebSocket and display the response.
+
+        Streaming tokens update a live Rich Panel so the typewriter effect
+        happens *inside* the LingYa response box.  ``transient=True`` clears
+        the live panel on exit; the final panel is re-rendered statically.
+        """
+        from rich.live import Live
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+
+        streamed = False
+        accumulated = ""
+
+        async def on_event(event: dict) -> None:
+            nonlocal streamed, accumulated
+            if event.get("event") != "chat.delta":
+                return
+            accumulated += event.get("payload", {}).get("content", "")
+            streamed = True
+            live.update(
+                Panel(Markdown(accumulated), border_style="green",
+                      title="LingYa", title_align="left")
+            )
+
+        with Live(
+            Panel("Thinking...", border_style="dim green",
+                  title="LingYa", title_align="left"),
+            console=self.console,
+            vertical_overflow="visible",
+            transient=True,
+        ) as live:
+            response = await self._ws_client.send_stream(
+                {"type": "chat", "payload": {"text": user_input}},
+                on_event=on_event,
+            )
+
+        if streamed:
+            self.console.print(
+                Panel(Markdown(accumulated), border_style="green",
+                      title="LingYa", title_align="left")
+            )
+            meta = response.get("payload", {}).get("meta", {})
+            if meta:
+                parts = [f"{k}={v}ms" for k, v in meta.items()]
+                self.console.print(f"[dim]{'  '.join(parts)}[/]")
+        else:
+            self._display_response(response)
 
     async def _handle_command(self, cmd: str) -> None:
         """Handle slash commands."""

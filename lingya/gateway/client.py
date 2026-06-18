@@ -14,6 +14,7 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Awaitable, Callable
 
 from lingya.gateway.protocol import (
     OP_CLOSE,
@@ -97,6 +98,49 @@ class GatewayClient:
 
             if opcode == OP_TEXT:
                 return json.loads(data.decode("utf-8"))
+            elif opcode == OP_CLOSE:
+                raise ConnectionError("Gateway closed the connection")
+            elif opcode == OP_PING:
+                # Respond with pong
+                await _send_masked_frame(self._writer, OP_PONG, data)
+            # PONG and other opcodes are silently ignored
+
+    async def send_stream(
+        self,
+        message: dict,
+        on_event: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> dict:
+        """Send a message and receive streaming responses.
+
+        When *on_event* is provided, each ``{"type": "event", ...}`` frame
+        received before the final response is passed to *on_event* immediately.
+        The final ``{"type": "chat_response", ...}`` (or error) frame is
+        returned.
+
+        When *on_event* is None, behaves like ``send()`` — waits for the
+        first non-event text frame and returns it.
+
+        Raises:
+            ConnectionError: If not connected or connection is lost.
+        """
+        if not self.is_connected or self._writer is None or self._reader is None:
+            raise ConnectionError("Not connected to Gateway")
+
+        # Send the message as a masked text frame
+        payload = json.dumps(message, ensure_ascii=False, default=str).encode("utf-8")
+        await _send_masked_frame(self._writer, OP_TEXT, payload)
+
+        # Read response frames — event frames go to callback, final frame returned
+        while True:
+            opcode, data = await _read_frame(self._reader)
+
+            if opcode == OP_TEXT:
+                msg = json.loads(data.decode("utf-8"))
+                if msg.get("type") == "event":
+                    if on_event is not None:
+                        await on_event(msg)
+                    continue
+                return msg
             elif opcode == OP_CLOSE:
                 raise ConnectionError("Gateway closed the connection")
             elif opcode == OP_PING:

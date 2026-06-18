@@ -113,7 +113,23 @@ class GatewayServer:
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         # Malformed message — ignore, don't crash the connection
                         continue
-                    response = await self._router.route(message)
+
+                    msg_type = message.get("type", "")
+
+                    if msg_type == "chat":
+                        # Streaming path: push event frames as they arrive
+                        async def _emit(event_dict: dict) -> None:
+                            event_bytes = json.dumps(
+                                event_dict, ensure_ascii=False, default=str
+                            ).encode("utf-8")
+                            await _send_frame(writer, OP_TEXT, event_bytes)
+
+                        response = await self._router._handle_chat(
+                            message.get("payload", {}), emit=_emit
+                        )
+                    else:
+                        response = await self._router.route(message)
+
                     # Inject ws_hop_ms into chat_response meta
                     if response.get("type") == "chat_response":
                         ws_hop_ms = round((time.monotonic() - t_ws) * 1000, 1)

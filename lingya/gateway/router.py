@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -225,17 +226,25 @@ class MessageRouter:
             "payload": {"action": "search", "results": results},
         }
 
-    async def _handle_chat(self, payload: dict) -> dict:
-        """Process a chat message through the agent + mind engine pipeline."""
+    async def _handle_chat(
+        self,
+        payload: dict,
+        emit: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> dict:
+        """Process a chat message through the agent + mind engine pipeline.
+
+        When *emit* is provided, the agent runs via ``astream_events(version="v3")``
+        and streaming events are pushed through *emit* as they happen.
+        When *emit* is None (backward compat), falls back to ``agent.ainvoke()``.
+
+        Returns the final ``chat_response`` dict.
+        """
         text = payload.get("text", "")
         if not text:
             return {"type": "error", "payload": {"message": "Empty message"}}
 
         if self._agent is None:
-            return {
-                "type": "error",
-                "payload": {"message": "Agent not initialized"},
-            }
+            return {"type": "error", "payload": {"message": "Agent not initialized"}}
 
         # 1. Get dynamic tone fragment from engine
         fragment = self._engine.get_prompt_fragment()
@@ -243,34 +252,138 @@ class MessageRouter:
         if fragment:
             messages.insert(0, SystemMessage(content=fragment))
 
-        # 2. Invoke agent
+        config = {"configurable": {"thread_id": self._thread_id}}
+
+        if emit is not None:
+            return await self._handle_chat_streaming(messages, config, text, emit)
+        else:
+            return await self._handle_chat_invoke(messages, config, text)
+
+    async def _handle_chat_streaming(
+        self,
+        messages: list,
+        config: dict,
+        user_text: str,
+        emit: Callable[[dict], Awaitable[None]],
+    ) -> dict:
+        """Run agent via astream_events(version="v3") and emit streaming events."""
+        from lingya.transformers import create_lingya_transformer
+
+        accumulated_text = ""
+
         try:
-            result = await self._agent.ainvoke(
+            run = await self._agent.astream_events(
                 {"messages": messages},
-                {"configurable": {"thread_id": self._thread_id}},
+                config,
+                version="v3",
+                transformers=[create_lingya_transformer],
             )
+
+            async for event in run:
+                method = event["method"]
+
+                if method == "messages":
+                    payload_data, _metadata = event["params"]["data"]
+                    if isinstance(payload_data, dict) and "event" in payload_data:
+                        if payload_data["event"] == "content-block-delta":
+                            delta = payload_data.get("delta", {})
+                            if delta.get("type") == "text-delta":
+                                chunk = delta.get("text", "")
+                                accumulated_text += chunk
+                                await emit({
+                                    "type": "event",
+                                    "event": "chat.delta",
+                                    "payload": {"content": chunk},
+                                })
+
+                elif method == "lingya_inner":
+                    inner_event = event["params"]["data"]
+                    await emit({
+                        "type": "event",
+                        "event": inner_event["type"],
+                        "payload": inner_event["payload"],
+                    })
+
         except Exception as e:
             return {"type": "error", "payload": {"message": str(e)}}
 
-        # 3. Extract response text
-        msgs = result.get("messages", [])
-        ais = [m for m in msgs if isinstance(m, AIMessage)]
-        response_text = ais[-1].text if ais else ""
-
-        # 4. Process through MindEngine (same as CLI does)
+        # 4. Process through MindEngine
         t_engine = time.monotonic()
         await self._engine.process_event({
             "event_type": "outcome",
             "valence": "neutral",
             "focus": "self",
-            "description": text,
-            "content": text,
+            "description": user_text,
+            "content": user_text,
+        })
+        engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
+        if accumulated_text:
+            await self._engine.check_response_alignment(accumulated_text)
+
+        # Emit mind.transition
+        tone = self._engine.get_tone_params()
+        pad = self._engine.state.current_pad
+        last_emotion = (
+            self._engine.state.recent_emotions[-1]
+            if self._engine.state.recent_emotions
+            else {"emotion": "neutral", "intensity": 0.0}
+        )
+        await emit({
+            "type": "event",
+            "event": "mind.transition",
+            "payload": {
+                "pad": {
+                    "pleasure": pad.pleasure,
+                    "arousal": pad.arousal,
+                    "dominance": pad.dominance,
+                },
+                "occ_emotion": last_emotion["emotion"],
+                "ipc": f"{self._engine.state.ipc_state} (agency={self._engine.state.ipc_agency:.2f}, communion={self._engine.state.ipc_communion:.2f})",
+            },
+        })
+
+        return {
+            "type": "chat_response",
+            "payload": {
+                "text": accumulated_text,
+                "tone": tone,
+                "meta": {"engine_ms": engine_ms},
+            },
+        }
+
+    async def _handle_chat_invoke(
+        self,
+        messages: list,
+        config: dict,
+        user_text: str,
+    ) -> dict:
+        """Fallback path: agent.ainvoke() for backward compatibility."""
+        try:
+            result = await self._agent.ainvoke(
+                {"messages": messages},
+                config,
+            )
+        except Exception as e:
+            return {"type": "error", "payload": {"message": str(e)}}
+
+        # Extract response text
+        msgs = result.get("messages", [])
+        ais = [m for m in msgs if isinstance(m, AIMessage)]
+        response_text = ais[-1].text if ais else ""
+
+        # Process through MindEngine
+        t_engine = time.monotonic()
+        await self._engine.process_event({
+            "event_type": "outcome",
+            "valence": "neutral",
+            "focus": "self",
+            "description": user_text,
+            "content": user_text,
         })
         engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
         if response_text:
             await self._engine.check_response_alignment(response_text)
 
-        # 5. Return response with tone + meta
         return {
             "type": "chat_response",
             "payload": {
