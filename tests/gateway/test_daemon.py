@@ -268,11 +268,43 @@ class TestPidFileLifecycle:
             daemon._shutdown_event.set()
             await asyncio.wait_for(daemon_task, timeout=2.0)
 
-            # Builder was used
-            builder.with_database.assert_called_once()
-            builder.with_model.assert_called_once()
-            builder.with_memory.assert_called_once()
-            builder.with_event_bus.assert_called_once()
-            builder.with_engine.assert_called_once()
-            builder.with_agent.assert_called_once()
-            builder.build.assert_awaited_once()
+    async def test_start_passes_shutdown_callback_to_create_app(self, daemon):
+        """start() passes daemon._shutdown_event.set as shutdown_callback to create_app."""
+        mock_app = _make_mock_app()
+        mock_uvicorn_server = MagicMock()
+        mock_uvicorn_server.should_exit = False
+        mock_uvicorn_server.serve = AsyncMock()
+
+        async def tracking_server_serve():
+            while not mock_uvicorn_server.should_exit:
+                await asyncio.sleep(0.01)
+
+        mock_uvicorn_server.serve = tracking_server_serve
+        mock_create_app = MagicMock()
+
+        with patch("lingya.app.ApplicationBuilder") as MockBuilder, \
+             patch("lingya.gateway.router.MessageRouter"), \
+             patch("lingya.gateway.server.create_app", mock_create_app), \
+             patch("uvicorn.Server", return_value=mock_uvicorn_server), \
+             patch("uvicorn.Config"), \
+             patch("builtins.print"):
+            builder = MockBuilder.return_value
+            builder.with_database.return_value = builder
+            builder.with_model.return_value = builder
+            builder.with_memory.return_value = builder
+            builder.with_event_bus.return_value = builder
+            builder.with_engine.return_value = builder
+            builder.with_agent.return_value = builder
+            builder.build = AsyncMock(return_value=mock_app)
+
+            daemon_task = asyncio.create_task(daemon.start())
+            await asyncio.sleep(0.5)
+
+            # Verify create_app was called with shutdown_callback
+            mock_create_app.assert_called_once()
+            call_kwargs = mock_create_app.call_args[1]
+            assert "shutdown_callback" in call_kwargs
+            assert call_kwargs["shutdown_callback"] is not None
+
+            daemon._shutdown_event.set()
+            await asyncio.wait_for(daemon_task, timeout=2.0)

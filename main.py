@@ -98,8 +98,60 @@ async def start_main() -> None:
         await client.close()
 
 
+def stop_daemon(pid_file: str = "/tmp/lingya.pid") -> None:
+    """Send SIGTERM to a running daemon and wait for it to exit.
+
+    Handles three cases:
+    - PID file exists + process alive → SIGTERM, poll for exit (max 10s)
+    - PID file exists + process dead → clean stale file, notify
+    - No PID file → notify nothing to stop
+    """
+    import os as _os
+    import signal
+    import time
+    from pathlib import Path
+
+    pid_path = Path(pid_file)
+
+    if not pid_path.exists():
+        print("LingYa is not running.")
+        return
+
+    try:
+        pid = int(pid_path.read_text().strip())
+    except ValueError:
+        print("LingYa is not running.")
+        pid_path.unlink(missing_ok=True)
+        return
+
+    # Check if process is alive
+    try:
+        _os.kill(pid, 0)
+    except (ProcessLookupError, OSError):
+        # Process is already dead — stale PID file
+        pid_path.unlink(missing_ok=True)
+        print("No running daemon, cleaned stale PID file.")
+        return
+
+    # Process is alive — send SIGTERM
+    _os.kill(pid, signal.SIGTERM)
+
+    # Poll for exit (max 10s)
+    for _ in range(50):  # 50 * 0.2s = 10s
+        time.sleep(0.2)
+        try:
+            _os.kill(pid, 0)
+        except (ProcessLookupError, OSError):
+            print("LingYa daemon stopped.")
+            return
+
+    print("Daemon did not stop within 10 seconds.")
+
+
 if __name__ == "__main__":
-    if "--daemon" in sys.argv:
+    if "--stop" in sys.argv:
+        stop_daemon()
+    elif "--daemon" in sys.argv:
         asyncio.run(daemon_main())
     else:
         asyncio.run(start_main())

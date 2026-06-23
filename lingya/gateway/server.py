@@ -40,7 +40,8 @@ def create_app(
     router: Any = None,
     auth_enabled: bool = True,
     title: str = "LingYa Gateway",
-    version: str = "0.8.1",
+    version: str = "0.8.2",
+    shutdown_callback: Any = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -49,6 +50,8 @@ def create_app(
         auth_enabled: Whether to require Bearer token auth.
         title: OpenAPI doc title.
         version: OpenAPI doc version.
+        shutdown_callback: Optional callable invoked by POST /shutdown
+            to trigger graceful daemon shutdown.
     """
     app = FastAPI(title=title, version=version)
     auth = create_auth_dependency(auth_enabled=auth_enabled)
@@ -213,5 +216,14 @@ def create_app(
                 status_code=503,
             )
         return await router._handle_stats({})
+
+    # ── Shutdown ────────────────────────────────────────────────────
+
+    @app.post("/shutdown")
+    async def shutdown(_auth: bool = auth):
+        """Trigger graceful daemon shutdown. Requires Bearer auth."""
+        if shutdown_callback is not None:
+            shutdown_callback()
+        return {"status": "shutting_down"}
 
     return app

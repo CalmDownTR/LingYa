@@ -166,6 +166,17 @@ class TestGatewayClientSend:
         result = await connected_client.send({"type": "stats", "payload": {}})
         assert result["type"] == "stats_response"
 
+    async def test_send_shutdown(self, connected_client):
+        """shutdown maps to POST /shutdown."""
+        connected_client._client.post.return_value = _make_mock_response(
+            {"status": "shutting_down"}
+        )
+        result = await connected_client.send({"type": "shutdown", "payload": {}})
+        assert result == {"status": "shutting_down"}
+        connected_client._client.post.assert_called_with(
+            "/shutdown", headers=connected_client._auth_headers()
+        )
+
     async def test_send_unknown_type(self, connected_client):
         """Unknown message type returns error."""
         result = await connected_client.send({"type": "unknown", "payload": {}})

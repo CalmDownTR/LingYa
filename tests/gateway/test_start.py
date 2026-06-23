@@ -221,3 +221,56 @@ class TestStartMain:
 
             # Despite the exception, client.close() was called
             mock_client.close.assert_called_once()
+
+
+# ── Stop subcommand tests ───────────────────────────────────────────
+
+
+class TestStopSubcommand:
+    """Test main.py --stop logic."""
+
+    def test_stop_daemon_running(self, tmp_path):
+        """Sends SIGTERM to running daemon, polls until exit, prints confirmation."""
+        import signal
+        import os as _os
+        from main import stop_daemon
+
+        pid_file = tmp_path / "lingya.pid"
+        pid_file.write_text(str(_os.getpid()))  # Our own PID is alive
+
+        with patch("builtins.print") as mock_print, \
+             patch("os.kill") as mock_kill, \
+             patch("time.sleep"):
+            # First kill(pid, 0) → alive; after SIGTERM → dead
+            mock_kill.side_effect = [None, None, ProcessLookupError()]
+            stop_daemon(pid_file=str(pid_file))
+            mock_kill.assert_any_call(_os.getpid(), signal.SIGTERM)
+            assert any("stopped" in str(c).lower() for c in mock_print.call_args_list)
+
+    def test_stop_no_daemon(self, tmp_path):
+        """No PID file → prints not running message."""
+        from main import stop_daemon
+
+        pid_file = str(tmp_path / "nonexistent.pid")
+
+        with patch("builtins.print") as mock_print:
+            stop_daemon(pid_file=pid_file)
+            printed = " ".join(
+                str(c[0][0]) for c in mock_print.call_args_list if c[0]
+            )
+            assert "not running" in printed.lower()
+
+    def test_stop_stale_pid_file(self, tmp_path):
+        """PID file exists but process dead → cleans file, prints message."""
+        from main import stop_daemon
+
+        pid_file = tmp_path / "lingya.pid"
+        pid_file.write_text("99999")  # Non-existent PID
+
+        with patch("builtins.print") as mock_print:
+            stop_daemon(pid_file=str(pid_file))
+            assert not pid_file.exists()
+            printed = " ".join(
+                str(c[0][0]) for c in mock_print.call_args_list if c[0]
+            )
+            assert "stale" in printed.lower() or "cleaned" in printed.lower()

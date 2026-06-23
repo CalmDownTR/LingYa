@@ -158,6 +158,8 @@ class LingYaCLI:
             case "/exit" | "/quit":
                 self.console.print("[dim]Goodbye.[/]")
                 raise EOFError()
+            case "/stop":
+                await self._cmd_stop()
             case "/help":
                 self._show_help()
             case "/new":
@@ -239,6 +241,19 @@ class LingYaCLI:
                 "payload": {},
             })
         self._display_response(response)
+
+    async def _cmd_stop(self) -> None:
+        """Handle /stop — trigger graceful daemon shutdown."""
+        with self.console.status("[dim]Shutting down daemon...[/]"):
+            response = await self._client.send({
+                "type": "shutdown",
+                "payload": {},
+            })
+        if response.get("status") == "shutting_down":
+            self.console.print("[green]Daemon is shutting down. Goodbye.[/]")
+        else:
+            self._display_response(response)
+        raise EOFError()
 
     def _display_response(self, response: dict) -> None:
         """Display a WebSocket response."""
@@ -390,6 +405,7 @@ class LingYaCLI:
 | `/memories` | List all stored memories |
 | `/mind` | Show current mind state (PAD, OCEAN, tone) |
 | `/stats` | Show pipeline performance stats |
+| `/stop` | Gracefully stop the LingYa daemon |
 | `/help` | Show this help |
 | `/exit`, `/quit` | Exit LingYa |
 

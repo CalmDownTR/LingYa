@@ -297,6 +297,41 @@ class TestStatsEndpoint:
         assert resp.status_code == 200
 
 
+# ── Shutdown endpoint ──────────────────────────────────────────────
+
+
+class TestShutdownEndpoint:
+    def test_shutdown_triggers_callback(self):
+        """POST /shutdown calls the shutdown_callback and returns shutting_down."""
+        callback_called = []
+
+        def _callback():
+            callback_called.append(True)
+
+        app = create_app(router=None, auth_enabled=False, shutdown_callback=_callback)
+        client = TestClient(app)
+        resp = client.post("/shutdown")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "shutting_down"}
+        assert len(callback_called) == 1
+
+    def test_shutdown_requires_auth(self, monkeypatch):
+        """POST /shutdown without auth returns 401 when auth is enabled."""
+        monkeypatch.setenv("LINGYA_API_KEY", "test-key")
+        app = create_app(router=None, auth_enabled=True, shutdown_callback=lambda: None)
+        client = TestClient(app)
+        resp = client.post("/shutdown")
+        assert resp.status_code == 401
+
+    def test_shutdown_no_callback_graceful(self):
+        """POST /shutdown does not crash when callback is None."""
+        app = create_app(router=None, auth_enabled=False, shutdown_callback=None)
+        client = TestClient(app)
+        resp = client.post("/shutdown")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "shutting_down"}
+
+
 # ── CORS ────────────────────────────────────────────────────────────
 
 

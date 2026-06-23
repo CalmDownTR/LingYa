@@ -59,6 +59,7 @@ class GatewayDaemon:
         fastapi_app = create_app(
             router=router,
             auth_enabled=self.config.auth_enabled,
+            shutdown_callback=self._shutdown_event.set,
         )
 
         uvicorn_config = uvicorn.Config(

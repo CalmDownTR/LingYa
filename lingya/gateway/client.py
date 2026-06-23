@@ -122,6 +122,13 @@ class GatewayClient:
                 resp.raise_for_status()
                 return resp.json()
 
+            elif msg_type == "shutdown":
+                resp = await self._client.post(
+                    "/shutdown", headers=headers
+                )
+                resp.raise_for_status()
+                return resp.json()
+
             elif msg_type == "chat":
                 # Non-streaming chat — just return the final response
                 return await self.send_stream(message, on_event=None)
