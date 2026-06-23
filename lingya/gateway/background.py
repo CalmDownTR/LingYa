@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -40,7 +40,6 @@ class BackgroundRunner:
         heartbeat_interval: int = 60,
         diary_check_interval: int = 3600,
         decay_interval: int = 86400,
-        tracer: Any = None,
     ) -> None:
         self._engine = engine
         self._db = db
@@ -50,7 +49,6 @@ class BackgroundRunner:
         self.heartbeat_interval = heartbeat_interval
         self.diary_check_interval = diary_check_interval
         self.decay_interval = decay_interval
-        self._tracer = tracer
 
         self._running: bool = True
         self._heartbeat_task: asyncio.Task | None = None
@@ -112,11 +110,7 @@ class BackgroundRunner:
 
             if not self._running:
                 break
-            if self._tracer:
-                with self._tracer.start_as_current_span("bg.heartbeat"):
-                    await self._engine.idle_tick()
-            else:
-                await self._engine.idle_tick()
+            await self._engine.idle_tick()
 
     async def _diary_scheduler_loop(self) -> None:
         """Check if diary is due, generate if so — fire every diary_check_interval seconds."""
@@ -129,11 +123,7 @@ class BackgroundRunner:
             if not self._running:
                 break
 
-            if self._tracer:
-                with self._tracer.start_as_current_span("bg.diary_scheduler"):
-                    await self._try_generate_diary()
-            else:
-                await self._try_generate_diary()
+            await self._try_generate_diary()
 
     # ── Memory Decay Loop ───────────────────────────────────────────
 
@@ -151,20 +141,14 @@ class BackgroundRunner:
             if self._memory is None:
                 continue
 
-            if self._tracer:
-                with self._tracer.start_as_current_span("bg.decay"):
-                    affected = self._memory.apply_decay()
-                    if affected > 0:
-                        logger.info("Memory decay: %d memories affected", affected)
-            else:
-                try:
-                    affected = self._memory.apply_decay()
-                    if affected > 0:
-                        logger.info("Memory decay: %d memories affected", affected)
-                except Exception:
-                    logger.exception(
-                        "Memory decay error — will retry on next tick"
-                    )
+            try:
+                affected = self._memory.apply_decay()
+                if affected > 0:
+                    logger.info("Memory decay: %d memories affected", affected)
+            except Exception:
+                logger.exception(
+                    "Memory decay error — will retry on next tick"
+                )
 
     async def _try_generate_diary(self) -> None:
         """Check diary eligibility and generate if due.

@@ -94,10 +94,12 @@ MindEngine (pure computation, zero framework dependency)
 | `lingya/reflection.py` | Opening | Generates context-aware opening line for returning users |
 
 ### Configuration
-- `config.yaml` — runtime settings (safe to commit): LLM, db_path, memory_path, data_dir
+- `config.yaml` — runtime settings (safe to commit): LLM, db_path, memory_path, data_dir, `otel.enabled` (toggles Traceloop auto-instrumentation)
 - `agent_config.yaml` — mind config: identity, OCEAN traits, tone_matrix, behavior_guardrails
 - `agent_config.example.yaml` — template for new setups
+
 - `.env` — secrets: `DEEPSEEK_API_KEY`, `LINGYA_API_KEY`
+- `TRACELOOP_TRACE_CONTENT=false` — omit prompt/completion content from OTel spans (privacy)
 
 ## 协作流程
 

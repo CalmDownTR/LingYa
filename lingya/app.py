@@ -39,7 +39,6 @@ class Application:
     memory: EnhancedMemoryStore | None
     engine: MindEngine | None
     static_prompt: str
-    tracer: Any = None
     event_bus: EventBus | None = None
     agent: Any = None
     checkpointer: AsyncSqliteSaver | None = None
@@ -83,16 +82,8 @@ class ApplicationBuilder:
         self._checkpointer: AsyncSqliteSaver | None = None
         self._checkpointer_ctx: Any = None
         self._extra_tools: list = []
-        self._tracer: Any = None
 
     # ── Builder steps ─────────────────────────────────────────────────
-
-    def with_observability(self) -> Self:
-        """Initialize OpenTelemetry tracing (no-op if otel.enabled=false)."""
-        from lingya.observability import init_observability
-
-        self._tracer = init_observability(self._config)
-        return self
 
     def with_database(self) -> Self:
         self._db = Database(self._config.db_path)
@@ -137,7 +128,6 @@ class ApplicationBuilder:
             memory_store=self._memory,
             llm_call=llm_call,
             event_bus=self._event_bus,
-            tracer=self._tracer,
         )
         self._static_prompt = build_static_prompt(self._mind_config)
         return self
@@ -209,7 +199,6 @@ class ApplicationBuilder:
             memory=self._memory,
             engine=self._engine,
             static_prompt=self._static_prompt,
-            tracer=self._tracer,
             event_bus=self._event_bus,
             agent=self._agent,
             checkpointer=self._checkpointer,

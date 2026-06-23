@@ -25,6 +25,11 @@ from pydantic import BaseModel
 
 from lingya.gateway.auth import create_auth_dependency
 
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+except ImportError:  # pragma: no cover — traceloop-sdk provides this
+    FastAPIInstrumentor = None  # type: ignore[assignment,misc]
+
 
 # ── Request models ───────────────────────────────────────────────────
 
@@ -40,7 +45,7 @@ def create_app(
     router: Any = None,
     auth_enabled: bool = True,
     title: str = "LingYa Gateway",
-    version: str = "0.8.2",
+    version: str = "0.8.3",
     shutdown_callback: Any = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
@@ -55,6 +60,12 @@ def create_app(
     """
     app = FastAPI(title=title, version=version)
     auth = create_auth_dependency(auth_enabled=auth_enabled)
+
+    # Auto-instrument HTTP requests with OTel spans (no-op if traceloop not installed).
+    # FastAPIInstrumentor is provided by opentelemetry-instrumentation-fastapi
+    # which is a transitive dependency of traceloop-sdk.
+    if FastAPIInstrumentor is not None:
+        FastAPIInstrumentor().instrument_app(app)
 
     # CORS — allow all origins in dev, configurable later
     app.add_middleware(

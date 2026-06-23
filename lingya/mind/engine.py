@@ -68,7 +68,6 @@ class MindEngine:
         llm_call: Callable[[str], Awaitable[str]],
         embedding_fn: Callable[[str], list[float]] | None = None,
         event_bus: "EventBus | None" = None,
-        tracer: Any = None,
     ) -> None:
         self.config = config
         self.memory = memory_store
@@ -80,7 +79,6 @@ class MindEngine:
         self._last_stage: str = "initial"
         self._db = None  # Set after construction for load/save
         self._event_bus = event_bus
-        self._tracer = tracer
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -169,16 +167,20 @@ class MindEngine:
         if self._db is not None:
             await self.save_state(self._db)
 
-        # OTel span — record PAD/OCEAN/IPC/tone as attributes
-        if self._tracer is not None:
-            with self._tracer.start_as_current_span("mind.process_event") as span:
-                span.set_attribute("pad.pleasure", self.state.current_pad.pleasure)
-                span.set_attribute("pad.arousal", self.state.current_pad.arousal)
-                span.set_attribute("pad.dominance", self.state.current_pad.dominance)
-                span.set_attribute("emotion", result.emotion)
-                span.set_attribute("emotion.intensity", result.intensity)
-                span.set_attribute("ipc", self.state.ipc_state)
-                span.set_attribute("turn", self.state.turn_counter)
+        # OTel span — record PAD/OCEAN/IPC/tone as business attributes.
+        # Uses global tracer provider (set by Traceloop.init() in daemon);
+        # returns NoOp tracer when otel.enabled=False (zero overhead).
+        from opentelemetry import trace
+
+        tracer = trace.get_tracer("lingya.mind")
+        with tracer.start_as_current_span("mind.process_event") as span:
+            span.set_attribute("pad.pleasure", self.state.current_pad.pleasure)
+            span.set_attribute("pad.arousal", self.state.current_pad.arousal)
+            span.set_attribute("pad.dominance", self.state.current_pad.dominance)
+            span.set_attribute("emotion", result.emotion)
+            span.set_attribute("emotion.intensity", result.intensity)
+            span.set_attribute("ipc", self.state.ipc_state)
+            span.set_attribute("turn", self.state.turn_counter)
 
         if self._event_bus is not None:
             await self._event_bus.publish(
@@ -223,10 +225,6 @@ class MindEngine:
         # Auto-persist
         if self._db is not None:
             await self.save_state(self._db)
-
-        if self._tracer is not None:
-            with self._tracer.start_as_current_span("mind.idle_tick") as span:
-                span.set_attribute("pad.pleasure", self.state.current_pad.pleasure)
 
     async def _deferred_importance_score(self, text: str, entry_id: str) -> None:
         """Background: score importance with LLM and update stored metadata."""

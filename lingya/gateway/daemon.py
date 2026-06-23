@@ -40,6 +40,17 @@ class GatewayDaemon:
         from lingya.gateway.router import MessageRouter
         from lingya.gateway.server import create_app
 
+        # 0. Auto-instrumentation via OpenLLMetry (no-op if otel.enabled=False).
+        # One line covers LangChain, OpenAI, and ChromaDB — all producing OTel spans.
+        # v1.0 export to Langfuse via OTEL_EXPORTER_OTLP_ENDPOINT env var (zero code change).
+        if self.config.otel.enabled:
+            from traceloop.sdk import Traceloop
+
+            Traceloop.init(
+                disable_batch=False,
+                # TRACELOOP_TRACE_CONTENT=false keeps prompt/completion out of spans
+            )
+
         # 1. Assemble application via builder
         self._app = await (
             ApplicationBuilder(self.config, self.mind_config)
@@ -109,7 +120,7 @@ class GatewayDaemon:
             self._bg_runner = BackgroundRunner(
                 engine=self._app.engine, db=self._app.db,
                 model=self._app.model, data_dir=self.config.data_dir,
-                memory=self._app.memory, tracer=self._app.tracer,
+                memory=self._app.memory,
             )
             await self._bg_runner.start()
 
