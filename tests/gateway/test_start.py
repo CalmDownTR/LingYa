@@ -70,7 +70,7 @@ class TestStartMain:
             side_effect=is_running_side_effect,
         ) as mock_is_running, \
              patch(
-            "lingya.gateway.server._find_port_owner", return_value=None
+            "lingya.gateway.daemon._find_port_owner", return_value=None
         ), \
              patch(
             "subprocess.Popen", return_value=mock_popen
@@ -107,7 +107,7 @@ class TestStartMain:
             "lingya.gateway.daemon.GatewayDaemon.is_running", return_value=False
         ) as mock_is_running, \
              patch(
-            "lingya.gateway.server._find_port_owner", return_value=None
+            "lingya.gateway.daemon._find_port_owner", return_value=None
         ), \
              patch(
             "subprocess.Popen", return_value=mock_popen
@@ -151,7 +151,7 @@ class TestStartMain:
             "lingya.gateway.daemon.GatewayDaemon.is_running", return_value=False
         ), \
              patch(
-            "lingya.gateway.server._find_port_owner", return_value=None
+            "lingya.gateway.daemon._find_port_owner", return_value=None
         ), \
              patch(
             "subprocess.Popen", return_value=mock_popen

@@ -255,7 +255,15 @@ class MessageRouter:
         config = {"configurable": {"thread_id": self._thread_id}}
 
         if emit is not None:
-            return await self._handle_chat_streaming(messages, config, text, emit)
+            final = None
+            async for event_dict in self._handle_chat_streaming(
+                messages, config, text
+            ):
+                if event_dict.get("type") in ("chat_response", "error"):
+                    final = event_dict
+                else:
+                    await emit(event_dict)
+            return final
         else:
             return await self._handle_chat_invoke(messages, config, text)
 
@@ -264,9 +272,16 @@ class MessageRouter:
         messages: list,
         config: dict,
         user_text: str,
-        emit: Callable[[dict], Awaitable[None]],
-    ) -> dict:
-        """Run agent via astream_events(version="v3") and emit streaming events."""
+    ):
+        """Run agent via astream_events and yield streaming events + final response.
+
+        Yields ``{"type": "event", "event": "...", "payload": {...}}`` dicts
+        for each streaming event, then a final ``{"type": "chat_response", ...}``
+        or ``{"type": "error", ...}`` dict.
+
+        The caller decides how to deliver these — emit callback (backward compat),
+        SSE frames (FastAPI), or any other transport.
+        """
         from lingya.transformers import create_lingya_transformer
 
         accumulated_text = ""
@@ -290,66 +305,67 @@ class MessageRouter:
                             if delta.get("type") == "text-delta":
                                 chunk = delta.get("text", "")
                                 accumulated_text += chunk
-                                await emit({
+                                yield {
                                     "type": "event",
                                     "event": "chat.delta",
                                     "payload": {"content": chunk},
-                                })
+                                }
 
                 elif method == "lingya_inner":
                     inner_event = event["params"]["data"]
-                    await emit({
+                    yield {
                         "type": "event",
                         "event": inner_event["type"],
                         "payload": inner_event["payload"],
-                    })
+                    }
+
+            # 4. Process through MindEngine
+            t_engine = time.monotonic()
+            await self._engine.process_event({
+                "event_type": "outcome",
+                "valence": "neutral",
+                "focus": "self",
+                "description": user_text,
+                "content": user_text,
+            })
+            engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
+            if accumulated_text:
+                await self._engine.check_response_alignment(accumulated_text)
+
+            # Yield mind.transition
+            tone = self._engine.get_tone_params()
+            pad = self._engine.state.current_pad
+            last_emotion = (
+                self._engine.state.recent_emotions[-1]
+                if self._engine.state.recent_emotions
+                else {"emotion": "neutral", "intensity": 0.0}
+            )
+            yield {
+                "type": "event",
+                "event": "mind.transition",
+                "payload": {
+                    "pad": {
+                        "pleasure": pad.pleasure,
+                        "arousal": pad.arousal,
+                        "dominance": pad.dominance,
+                    },
+                    "occ_emotion": last_emotion["emotion"],
+                    "ipc": f"{self._engine.state.ipc_state} (agency={self._engine.state.ipc_agency:.2f}, communion={self._engine.state.ipc_communion:.2f})",
+                },
+            }
+
+            # Yield final response
+            yield {
+                "type": "chat_response",
+                "payload": {
+                    "text": accumulated_text,
+                    "tone": tone,
+                    "meta": {"engine_ms": engine_ms},
+                },
+            }
 
         except Exception as e:
-            return {"type": "error", "payload": {"message": str(e)}}
-
-        # 4. Process through MindEngine
-        t_engine = time.monotonic()
-        await self._engine.process_event({
-            "event_type": "outcome",
-            "valence": "neutral",
-            "focus": "self",
-            "description": user_text,
-            "content": user_text,
-        })
-        engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
-        if accumulated_text:
-            await self._engine.check_response_alignment(accumulated_text)
-
-        # Emit mind.transition
-        tone = self._engine.get_tone_params()
-        pad = self._engine.state.current_pad
-        last_emotion = (
-            self._engine.state.recent_emotions[-1]
-            if self._engine.state.recent_emotions
-            else {"emotion": "neutral", "intensity": 0.0}
-        )
-        await emit({
-            "type": "event",
-            "event": "mind.transition",
-            "payload": {
-                "pad": {
-                    "pleasure": pad.pleasure,
-                    "arousal": pad.arousal,
-                    "dominance": pad.dominance,
-                },
-                "occ_emotion": last_emotion["emotion"],
-                "ipc": f"{self._engine.state.ipc_state} (agency={self._engine.state.ipc_agency:.2f}, communion={self._engine.state.ipc_communion:.2f})",
-            },
-        })
-
-        return {
-            "type": "chat_response",
-            "payload": {
-                "text": accumulated_text,
-                "tone": tone,
-                "meta": {"engine_ms": engine_ms},
-            },
-        }
+            yield {"type": "error", "payload": {"message": str(e)}}
 
     async def _handle_chat_invoke(
         self,

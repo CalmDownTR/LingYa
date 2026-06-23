@@ -1,7 +1,7 @@
 """Integration tests for the Gateway daemon lifecycle.
 
 These tests exercise the real daemon.start() path with a real SQLite
-database and a real WebSocket connection.  Only the LLM is mocked.
+database and a real HTTP connection.  Only the LLM is mocked.
 """
 
 from __future__ import annotations
@@ -104,15 +104,14 @@ class TestDaemonLifecycle:
                 else:
                     pytest.fail("Daemon did not write PID file within 5 seconds")
 
-                # Connect via real WebSocket client — no extra wait needed
+                # Connect via HTTP client — PID file signals server readiness
                 client = GatewayClient(port=TEST_PORT)
                 await client.connect()
                 assert client.is_connected
 
-                # Ping → Pong
+                # Ping → /health returns {"status": "ok"}
                 response = await client.send({"type": "ping", "payload": {}})
-                assert response["type"] == "pong"
-                assert "timestamp" in response["payload"]
+                assert response == {"status": "ok"}
 
                 await client.close()
                 assert not client.is_connected
@@ -205,7 +204,7 @@ class TestDaemonLifecycle:
                 assert client.is_connected
 
                 response = await client.send({"type": "ping", "payload": {}})
-                assert response["type"] == "pong"
+                assert response == {"status": "ok"}
 
                 await client.close()
 

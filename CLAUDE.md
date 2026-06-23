@@ -29,7 +29,7 @@ uv run mypy lingya/              # Type check
 LingYa 基于 **deepagents** (`create_deep_agent`) 构建，支持两种运行模式：
 
 **Direct mode** (`python main.py`): CLI 进程内直连 agent
-**Gateway mode** (`python main.py start`): 常驻 daemon + WebSocket 多客户端
+**Gateway mode** (`python main.py start`): 常驻 daemon + HTTP/SSE 多客户端
 
 ```
 main.py
@@ -42,11 +42,11 @@ main.py
   │     │     ├── system_prompt: build_static_prompt()
   │     │     ├── backend: StateBackend
   │     │     └── checkpointer: AsyncSqliteSaver
-  │     ├── GatewayServer (asyncio WebSocket, RFC 6455, 零依赖)
+  │     ├── FastAPI Server (HTTP + SSE, uvicorn)
   │     ├── MessageRouter (mind/diary/memory/chat 路由)
   │     └── BackgroundRunner (PAD idle drift + diary scheduler + memory decay)
   │
-  ├── [start] → 自动拉起 daemon + WebSocket CLI 客户端
+  ├── [start] → 自动拉起 daemon + HTTP CLI 客户端
   │
   └── [default] → LingYaCLI (进程内直连 agent + MindEngine)
 
@@ -71,10 +71,11 @@ MindEngine (pure computation, zero framework dependency)
 6. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
 7. State checkpointed by LangGraph
 
-**Gateway mode** (WebSocket, text-level forwarding):
-1. Client sends `{"type": "chat", "payload": {"text": "..."}}` via WebSocket
-2. GatewayServer parses frame → MessageRouter.route()
-3. `handle_chat`: get_prompt_fragment() → agent.ainvoke() → extract AIMessage → MindEngine.process_event()
+**Gateway mode** (HTTP + SSE, FastAPI):
+1. Client sends `POST /chat` with `{"text": "..."}` via HTTP
+2. FastAPI endpoint → router._handle_chat_streaming() async generator
+3. Agent astream_events → SSE event frames pushed to client
+4. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
 4. Response `{"type": "chat_response", "payload": {"text": "...", "tone": {...}}}` sent back
 5. BackgroundRunner maintains independent life rhythm: PAD idle drift, diary scheduling, memory decay
 
@@ -83,9 +84,9 @@ MindEngine (pure computation, zero framework dependency)
 | Module | Role | Key detail |
 |--------|------|------------|
 | `main.py` | Assembly | Wires model + tools + middleware + MindEngine; 3 entry points: --daemon / start / default |
-| `lingya/cli.py` | Terminal UI | Rich-based, dual mode: direct (`run()`) + WebSocket (`run_ws()`) |
+| `lingya/cli.py` | Terminal UI | Rich-based, dual mode: direct (`run()`) + HTTP/SSE client |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
-| `lingya/gateway/` | Multi-entry | Daemon, WS server (RFC 6455), message router, client, protocol, BackgroundRunner |
+| `lingya/gateway/` | Multi-entry | Daemon, FastAPI SSE server, message router, HTTP client, auth, BackgroundRunner |
 | `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection → idle_tick |
 | `lingya/memory/` | Memory | ChromaDB-backed, importance-weighted, three-level decay (retrieval_weight), recover |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, tables: conversations, turns, mind_state |

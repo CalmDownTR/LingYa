@@ -125,10 +125,11 @@ class TestIsRunning:
 @pytest.mark.asyncio
 class TestPidFileLifecycle:
     async def test_pid_file_written_after_server_ready(self, daemon, tmp_path):
-        """PID file is written only after WebSocket server is listening."""
+        """PID file is written only after HTTP server is listening."""
         mock_app = _make_mock_app()
-        mock_ws_server = AsyncMock()
-        mock_ws_server.start = AsyncMock()
+        mock_uvicorn_server = MagicMock()
+        mock_uvicorn_server.should_exit = False
+        mock_uvicorn_server.serve = AsyncMock()
 
         events: list[str] = []
 
@@ -137,16 +138,20 @@ class TestPidFileLifecycle:
             events.append("pid")
             original_write_pid()
 
-        async def tracking_server_start():
+        async def tracking_server_serve():
+            # Record that server started, then block until should_exit (like real uvicorn)
             events.append("server_start")
-            daemon._shutdown_event.set()
+            while not mock_uvicorn_server.should_exit:
+                await asyncio.sleep(0.01)
 
-        mock_ws_server.start = tracking_server_start
+        mock_uvicorn_server.serve = tracking_server_serve
         daemon._write_pid_file = tracking_write_pid
 
         with patch("lingya.app.ApplicationBuilder") as MockBuilder, \
              patch("lingya.gateway.router.MessageRouter"), \
-             patch("lingya.gateway.server.GatewayServer", return_value=mock_ws_server), \
+             patch("lingya.gateway.server.create_app"), \
+             patch("uvicorn.Server", return_value=mock_uvicorn_server), \
+             patch("uvicorn.Config"), \
              patch("builtins.print"):
             builder = MockBuilder.return_value
             builder.with_database.return_value = builder
@@ -157,10 +162,18 @@ class TestPidFileLifecycle:
             builder.with_agent.return_value = builder
             builder.build = AsyncMock(return_value=mock_app)
 
-            await daemon.start()
+            # Run daemon.start() in background, wait for it to pass startup,
+            # then trigger shutdown
+            daemon_task = asyncio.create_task(daemon.start())
 
+            # Give it time to complete startup (PID file written)
+            await asyncio.sleep(0.5)
             assert events == ["server_start", "pid"], \
                 f"Expected ['server_start', 'pid'] but got {events}"
+
+            # Trigger shutdown
+            daemon._shutdown_event.set()
+            await asyncio.wait_for(daemon_task, timeout=2.0)
 
     async def test_pid_file_removed_on_shutdown(self, daemon, tmp_path):
         """shutdown() removes the PID file."""
@@ -212,19 +225,23 @@ class TestPidFileLifecycle:
         assert not os.path.exists(daemon.pid_file)
 
     async def test_start_full_sequence_uses_builder(self, daemon):
-        """Verify start() uses ApplicationBuilder and starts server."""
+        """Verify start() uses ApplicationBuilder and starts uvicorn server."""
         mock_app = _make_mock_app()
-        mock_ws_server = AsyncMock()
-        mock_ws_server.start = AsyncMock()
+        mock_uvicorn_server = MagicMock()
+        mock_uvicorn_server.should_exit = False
+        mock_uvicorn_server.serve = AsyncMock()
 
-        async def tracking_server_start():
-            daemon._shutdown_event.set()
+        async def tracking_server_serve():
+            while not mock_uvicorn_server.should_exit:
+                await asyncio.sleep(0.01)
 
-        mock_ws_server.start = tracking_server_start
+        mock_uvicorn_server.serve = tracking_server_serve
 
         with patch("lingya.app.ApplicationBuilder") as MockBuilder, \
              patch("lingya.gateway.router.MessageRouter"), \
-             patch("lingya.gateway.server.GatewayServer", return_value=mock_ws_server), \
+             patch("lingya.gateway.server.create_app"), \
+             patch("uvicorn.Server", return_value=mock_uvicorn_server), \
+             patch("uvicorn.Config"), \
              patch("builtins.print"):
             builder = MockBuilder.return_value
             builder.with_database.return_value = builder
@@ -235,7 +252,21 @@ class TestPidFileLifecycle:
             builder.with_agent.return_value = builder
             builder.build = AsyncMock(return_value=mock_app)
 
-            await daemon.start()
+            daemon_task = asyncio.create_task(daemon.start())
+            await asyncio.sleep(0.5)
+
+            # Builder was used
+            builder.with_database.assert_called_once()
+            builder.with_model.assert_called_once()
+            builder.with_memory.assert_called_once()
+            builder.with_event_bus.assert_called_once()
+            builder.with_engine.assert_called_once()
+            builder.with_agent.assert_called_once()
+            builder.build.assert_awaited_once()
+
+            # Trigger shutdown
+            daemon._shutdown_event.set()
+            await asyncio.wait_for(daemon_task, timeout=2.0)
 
             # Builder was used
             builder.with_database.assert_called_once()

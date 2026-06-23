@@ -1,218 +1,240 @@
-"""GatewayClient — pure asyncio WebSocket client, zero third-party deps.
+"""GatewayClient — HTTP + SSE client for LingYa Gateway.
 
-Connects to the LingYa Gateway via WebSocket and sends/receives JSON
-messages. Implements a minimal RFC 6455 client:
-- HTTP upgrade request
-- Masked text frame sending
-- Unmasked text frame receiving
-- Ping/pong/close handling
+Replaces the WebSocket client with standard HTTP:
+
+- ``send_stream()`` — POST /chat, parses SSE event stream, yields events to callback
+- ``send()`` — maps message types to REST endpoints (GET /mind, GET /memory, etc.)
+- ``connect()`` — verifies server is reachable via /health
+- ``close()`` — closes the httpx client
+
+Uses ``httpx`` for async HTTP (already a dependency).
 """
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import json
 import os
 from collections.abc import Awaitable, Callable
 
-from lingya.gateway.protocol import (
-    OP_CLOSE,
-    OP_PING,
-    OP_PONG,
-    OP_TEXT,
-    _generate_accept_key,
-    _read_frame,
-    _send_masked_frame,
-)
+import httpx
 
 
 class GatewayClient:
-    """Async WebSocket client for connecting to LingYa Gateway."""
+    """Async HTTP + SSE client for connecting to LingYa Gateway."""
 
     def __init__(self, host: str = "localhost", port: int = 8765) -> None:
         self._host = host
         self._port = port
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
+        self._base_url = f"http://{host}:{port}"
+        self._client: httpx.AsyncClient | None = None
+        self._api_key: str = os.environ.get("LINGYA_API_KEY", "")
 
     @property
     def is_connected(self) -> bool:
-        """Whether the WebSocket connection is currently open."""
-        return self._writer is not None and not self._writer.is_closing()
+        """Whether the HTTP client is initialized (not actually a persistent connection)."""
+        return self._client is not None and not self._client.is_closed
 
     async def connect(self) -> None:
-        """Connect to the Gateway via WebSocket.
-
-        1. Open TCP connection
-        2. Send HTTP upgrade request
-        3. Read handshake response (expect 101)
-        4. Store reader/writer
-        """
-        self._reader, self._writer = await asyncio.open_connection(
-            self._host, self._port
+        """Initialize HTTP client and verify server is reachable via /health."""
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(120.0, connect=10.0),
         )
-
+        headers = self._auth_headers()
         try:
-            # Generate a random WebSocket key and send upgrade request
-            ws_key = base64.b64encode(os.urandom(16)).decode()
-            request = _build_upgrade_request(self._host, self._port, ws_key)
-            self._writer.write(request.encode())
-            await self._writer.drain()
-
-            # Read and validate the handshake response
-            await _parse_handshake_response(self._reader, ws_key)
-        except Exception:
-            # Clean up on handshake failure so is_connected reports False
-            try:
-                self._writer.close()
-            except Exception:
-                pass
-            self._reader = None
-            self._writer = None
-            raise
+            resp = await self._client.get("/health", headers=headers)
+            resp.raise_for_status()
+        except Exception as e:
+            await self._client.aclose()
+            self._client = None
+            raise ConnectionError(f"Failed to connect to Gateway: {e}") from e
 
     async def send(self, message: dict) -> dict:
         """Send a JSON message and wait for the response.
 
-        Args:
-            message: Dict to serialize and send (e.g., {"type": "ping", "payload": {}}).
+        Maps message types to HTTP endpoints:
 
-        Returns:
-            The parsed JSON response dict.
+        - ``ping`` → GET /health
+        - ``mind`` → GET /mind?query=...
+        - ``memory`` → GET /memory?action=...&query=...
+        - ``diary`` → GET /diary?action=...&index=...
+        - ``session`` → POST /session?action=...
+        - ``stats`` → GET /stats
+        - ``chat`` → delegates to send_stream() (no on_event, returns final only)
 
         Raises:
-            ConnectionError: If not connected or connection is lost.
+            ConnectionError: If not connected.
         """
-        if not self.is_connected or self._writer is None or self._reader is None:
+        if self._client is None:
             raise ConnectionError("Not connected to Gateway")
 
-        # Send the message as a masked text frame
-        payload = json.dumps(message, ensure_ascii=False, default=str).encode("utf-8")
-        await _send_masked_frame(self._writer, OP_TEXT, payload)
+        msg_type = message.get("type", "")
+        payload = message.get("payload", {})
+        headers = self._auth_headers()
 
-        # Read response frames until we get a text frame
-        # (Skip ping/pong/close — the server may send these between messages)
-        while True:
-            opcode, data = await _read_frame(self._reader)
+        try:
+            if msg_type == "ping":
+                resp = await self._client.get("/health", headers=headers)
+                resp.raise_for_status()
+                return resp.json()
 
-            if opcode == OP_TEXT:
-                return json.loads(data.decode("utf-8"))
-            elif opcode == OP_CLOSE:
-                raise ConnectionError("Gateway closed the connection")
-            elif opcode == OP_PING:
-                # Respond with pong
-                await _send_masked_frame(self._writer, OP_PONG, data)
-            # PONG and other opcodes are silently ignored
+            elif msg_type == "mind":
+                query = payload.get("query", "state")
+                resp = await self._client.get(
+                    "/mind", params={"query": query}, headers=headers
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+            elif msg_type == "memory":
+                action = payload.get("action", "search")
+                params: dict = {"action": action}
+                if "query" in payload:
+                    params["query"] = payload["query"]
+                if "id" in payload:
+                    params["id"] = payload["id"]
+                resp = await self._client.get(
+                    "/memory", params=params, headers=headers
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+            elif msg_type == "diary":
+                action = payload.get("action", "list")
+                index = payload.get("index", 0)
+                params = {"action": action, "index": index}
+                resp = await self._client.get(
+                    "/diary", params=params, headers=headers
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+            elif msg_type == "session":
+                action = payload.get("action", "new")
+                resp = await self._client.post(
+                    "/session", params={"action": action}, headers=headers
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+            elif msg_type == "stats":
+                resp = await self._client.get("/stats", headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+
+            elif msg_type == "chat":
+                # Non-streaming chat — just return the final response
+                return await self.send_stream(message, on_event=None)
+
+            else:
+                return {
+                    "type": "error",
+                    "payload": {"message": f"Unknown message type: {msg_type}"},
+                }
+
+        except httpx.HTTPStatusError as e:
+            return {
+                "type": "error",
+                "payload": {"message": f"HTTP {e.response.status_code}"},
+            }
+        except httpx.RequestError as e:
+            return {
+                "type": "error",
+                "payload": {"message": str(e)},
+            }
 
     async def send_stream(
         self,
         message: dict,
         on_event: Callable[[dict], Awaitable[None]] | None = None,
     ) -> dict:
-        """Send a message and receive streaming responses.
+        """Send a chat message and receive streaming SSE responses.
 
         When *on_event* is provided, each ``{"type": "event", ...}`` frame
         received before the final response is passed to *on_event* immediately.
         The final ``{"type": "chat_response", ...}`` (or error) frame is
         returned.
 
-        When *on_event* is None, behaves like ``send()`` — waits for the
-        first non-event text frame and returns it.
+        When *on_event* is None, only the final frame is returned (events are
+        consumed silently).
 
         Raises:
-            ConnectionError: If not connected or connection is lost.
+            ConnectionError: If not connected.
         """
-        if not self.is_connected or self._writer is None or self._reader is None:
+        if self._client is None:
             raise ConnectionError("Not connected to Gateway")
 
-        # Send the message as a masked text frame
-        payload = json.dumps(message, ensure_ascii=False, default=str).encode("utf-8")
-        await _send_masked_frame(self._writer, OP_TEXT, payload)
+        text = message.get("payload", {}).get("text", "")
+        headers = {
+            **self._auth_headers(),
+            "Accept": "text/event-stream",
+        }
 
-        # Read response frames — event frames go to callback, final frame returned
-        while True:
-            opcode, data = await _read_frame(self._reader)
+        try:
+            async with self._client.stream(
+                "POST",
+                "/chat",
+                json={"text": text},
+                headers=headers,
+                timeout=httpx.Timeout(300.0, connect=10.0),
+            ) as response:
+                response.raise_for_status()
 
-            if opcode == OP_TEXT:
-                msg = json.loads(data.decode("utf-8"))
-                if msg.get("type") == "event":
-                    if on_event is not None:
-                        await on_event(msg)
-                    continue
-                return msg
-            elif opcode == OP_CLOSE:
-                raise ConnectionError("Gateway closed the connection")
-            elif opcode == OP_PING:
-                # Respond with pong
-                await _send_masked_frame(self._writer, OP_PONG, data)
-            # PONG and other opcodes are silently ignored
+                # If not SSE, return as plain JSON
+                content_type = response.headers.get("content-type", "")
+                if "text/event-stream" not in content_type:
+                    # Non-streaming response (e.g., error)
+                    return response.json()
+
+                final: dict | None = None
+
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+
+                    data_str = line[6:]  # Strip "data: " prefix
+                    try:
+                        event_dict = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event_type = event_dict.get("type", "")
+
+                    if event_type in ("chat_response", "error"):
+                        final = event_dict
+                    elif event_type == "event":
+                        if on_event is not None:
+                            await on_event(event_dict)
+                    # Ignore other types
+
+                if final is not None:
+                    return final
+
+                # If we never got a final frame, return an error
+                return {
+                    "type": "error",
+                    "payload": {"message": "Stream ended without final response"},
+                }
+
+        except httpx.HTTPStatusError as e:
+            return {
+                "type": "error",
+                "payload": {"message": f"HTTP {e.response.status_code}"},
+            }
+        except httpx.RequestError as e:
+            return {
+                "type": "error",
+                "payload": {"message": str(e)},
+            }
 
     async def close(self) -> None:
-        """Close the WebSocket connection gracefully."""
-        if self._writer is not None and not self._writer.is_closing():
-            try:
-                await _send_masked_frame(self._writer, OP_CLOSE, b"")
-            except Exception:
-                pass
-            try:
-                self._writer.close()
-                await self._writer.wait_closed()
-            except Exception:
-                pass
-        self._reader = None
-        self._writer = None
+        """Close the HTTP client."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
-
-# ── Client-specific HTTP helpers ────────────────────────────────────
-
-
-def _build_upgrade_request(host: str, port: int, ws_key: str) -> str:
-    """Build the HTTP upgrade request for WebSocket handshake."""
-    return (
-        f"GET / HTTP/1.1\r\n"
-        f"Host: {host}:{port}\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Key: {ws_key}\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "\r\n"
-    )
-
-
-async def _parse_handshake_response(
-    reader: asyncio.StreamReader, expected_key: str
-) -> None:
-    """Read and validate the HTTP 101 handshake response.
-
-    Raises:
-        ConnectionError: If the response is not 101 or the accept key doesn't match.
-    """
-    # Read status line
-    status_line = await reader.readline()
-    status_line = status_line.decode("utf-8", errors="replace").strip()
-
-    if "101" not in status_line:
-        raise ConnectionError(
-            f"Expected 101 Switching Protocols, got: {status_line}"
-        )
-
-    # Read headers
-    headers: dict[str, str] = {}
-    while True:
-        line = await reader.readline()
-        line = line.decode("utf-8", errors="replace").strip()
-        if not line:
-            break
-        if ":" in line:
-            key, value = line.split(":", 1)
-            headers[key.strip().lower()] = value.strip()
-
-    # Verify the accept key
-    expected_accept = _generate_accept_key(expected_key)
-    actual_accept = headers.get("sec-websocket-accept", "")
-    if actual_accept != expected_accept:
-        raise ConnectionError(
-            f"Sec-WebSocket-Accept mismatch: "
-            f"expected {expected_accept}, got {actual_accept}"
-        )
+    def _auth_headers(self) -> dict[str, str]:
+        """Return Authorization header if API key is set."""
+        if self._api_key:
+            return {"Authorization": f"Bearer {self._api_key}"}
+        return {}

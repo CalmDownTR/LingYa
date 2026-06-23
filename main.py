@@ -42,9 +42,8 @@ async def start_main() -> None:
     2. If not, launch daemon as a subprocess and wait for WS server ready
     3. Connect CLI via WebSocket to the Gateway
     """
-    from lingya.gateway.daemon import GatewayDaemon
+    from lingya.gateway.daemon import GatewayDaemon, _find_port_owner
     from lingya.gateway.client import GatewayClient
-    from lingya.gateway.server import _find_port_owner
 
     PORT = 8765
 
@@ -88,7 +87,7 @@ async def start_main() -> None:
     try:
         await client.connect()
 
-        cli = LingYaCLI(ws_client=client)
+        cli = LingYaCLI(client=client)
         try:
             await cli.run()
         except (KeyboardInterrupt, EOFError):

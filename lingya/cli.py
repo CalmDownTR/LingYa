@@ -14,8 +14,8 @@ from rich.panel import Panel
 class LingYaCLI:
     """Thin CLI client — all logic lives in the Gateway daemon."""
 
-    def __init__(self, ws_client) -> None:
-        self._ws_client = ws_client
+    def __init__(self, client) -> None:
+        self._client = client
         self.console = Console()
 
     @staticmethod
@@ -129,10 +129,9 @@ class LingYaCLI:
             Panel("Thinking...", border_style="dim green",
                   title="LingYa", title_align="left"),
             console=self.console,
-            vertical_overflow="visible",
             transient=True,
         ) as live:
-            response = await self._ws_client.send_stream(
+            response = await self._client.send_stream(
                 {"type": "chat", "payload": {"text": user_input}},
                 on_event=on_event,
             )
@@ -184,7 +183,7 @@ class LingYaCLI:
     async def _cmd_new_session(self) -> None:
         """Handle /new — start a fresh conversation session."""
         with self.console.status("[dim]Starting new session...[/]"):
-            response = await self._ws_client.send({
+            response = await self._client.send({
                 "type": "session",
                 "payload": {"action": "new"},
             })
@@ -207,7 +206,7 @@ class LingYaCLI:
             payload = {"action": "read", "index": 0}
 
         with self.console.status("[dim]Querying diary...[/]"):
-            response = await self._ws_client.send({
+            response = await self._client.send({
                 "type": "diary",
                 "payload": payload,
             })
@@ -216,7 +215,7 @@ class LingYaCLI:
     async def _cmd_memories(self) -> None:
         """Handle /memories — lists all memories."""
         with self.console.status("[dim]Querying memories...[/]"):
-            response = await self._ws_client.send({
+            response = await self._client.send({
                 "type": "memory",
                 "payload": {"action": "list"},
             })
@@ -226,7 +225,7 @@ class LingYaCLI:
         """Handle /mind — query mind state."""
         query = arg if arg in ("state", "tone") else "state"
         with self.console.status("[dim]Querying mind state...[/]"):
-            response = await self._ws_client.send({
+            response = await self._client.send({
                 "type": "mind",
                 "payload": {"query": query},
             })
@@ -235,7 +234,7 @@ class LingYaCLI:
     async def _cmd_stats(self) -> None:
         """Handle /stats."""
         with self.console.status("[dim]Querying stats...[/]"):
-            response = await self._ws_client.send({
+            response = await self._client.send({
                 "type": "stats",
                 "payload": {},
             })

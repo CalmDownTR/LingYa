@@ -29,6 +29,7 @@ class Config(BaseModel):
     data_dir: str = "./data"
     persona_config_path: str = "agent_config.yaml"
     diary_period_days: int = 1
+    auth_enabled: bool = False  # Set to True + LINGYA_API_KEY env var for production
 
 
 def load_config(path: str | None = None) -> Config:
