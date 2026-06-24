@@ -39,6 +39,9 @@ data/
 # Eval outputs (generated, vary per run)
 tests/output/
 
+# Web UI
+web/node_modules/
+
 # Environment (secrets)
 .env
 agent_config.yaml
