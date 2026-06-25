@@ -39,8 +39,8 @@ data/
 # Eval outputs (generated, vary per run)
 tests/output/
 
-# Web UI
-web/node_modules/
+# Node (covers both root and web/)
+node_modules/
 web/dist/
 
 # Environment (secrets)
