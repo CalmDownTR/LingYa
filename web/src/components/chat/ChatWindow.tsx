@@ -16,6 +16,11 @@ export function ChatWindow() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { startStream, isStreaming, abort } = useSSE()
+  // Track the last thread_id we synced FROM the server, so we can detect
+  // external session changes (e.g. another tab switched, daemon restarted
+  // and restored a different session) without clobbering the user's own
+  // active switch before the server has caught up.
+  const lastSyncedServerTidRef = useRef<string | null>(null)
 
   // Fetch current session on mount to discover initial thread_id
   const { data: currentData } = useCurrentSession()
@@ -24,11 +29,29 @@ export function ChatWindow() {
   const { data: historyData, isError: historyError, refetch: refetchHistory } =
     useSessionHistory(currentThreadId)
 
-  // On mount: set initial threadId from current session
+  // Sync currentThreadId from server current session.
+  // - First load: always sync (currentThreadId === null)
+  // - Server-side change: only sync if the user hasn't actively switched
+  //   since the last server sync (currentThreadId === lastSyncedServerTidRef).
+  //   This prevents stale server responses from clobbering an in-flight
+  //   optimistic switch while still catching external changes.
   useEffect(() => {
     const tid = currentData?.payload?.session?.thread_id
-    if (tid && currentThreadId === null) {
+    if (!tid) return
+
+    const firstLoad = currentThreadId === null
+    const localMatchesLastSync = currentThreadId === lastSyncedServerTidRef.current
+    const serverChanged = lastSyncedServerTidRef.current !== null &&
+                          lastSyncedServerTidRef.current !== tid
+
+    if (firstLoad || (serverChanged && localMatchesLastSync)) {
       setCurrentThreadId(tid)
+      if (serverChanged) {
+        // External change — clear any locally-sent messages that belong
+        // to the previous session so they don't bleed into the new one.
+        setSentMessages([])
+      }
+      lastSyncedServerTidRef.current = tid
     }
   }, [currentData, currentThreadId])
 
@@ -64,6 +87,9 @@ export function ChatWindow() {
     setCurrentThreadId(threadId)
     setSentMessages([])
     setStreamingContent('')
+    // Mark this as a user-initiated switch — don't treat the next server
+    // refetch (which may briefly return the old tid) as an external change.
+    lastSyncedServerTidRef.current = threadId
   }, [abort])
 
   const handleSend = useCallback(

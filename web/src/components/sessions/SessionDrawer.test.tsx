@@ -57,7 +57,7 @@ describe('SessionDrawer', () => {
 
   // ── Visibility ──────────────────────────────────────────────────
 
-  it('when open=false, renders nothing', () => {
+  it('when open=false, drawer is hidden via CSS (slide-out + pointer-events none)', () => {
     vi.mocked(api.useSessions).mockReturnValue({
       data: { type: 'session_response', payload: { action: 'list', sessions: [] } },
       isLoading: false,
@@ -65,7 +65,27 @@ describe('SessionDrawer', () => {
     } as never)
 
     renderDrawer(false)
-    expect(screen.queryByText('会话')).not.toBeInTheDocument()
+    // Drawer is mounted (so transitions can play) but visually hidden.
+    // The header label "会话" is present in the DOM but the drawer is
+    // translated off-screen and ignores pointer events.
+    const drawer = screen.getByRole('dialog', { hidden: true })
+    expect(drawer.className).toContain('-translate-x-full')
+    expect(drawer.className).toContain('pointer-events-none')
+    expect(drawer.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('when open=true, drawer is visible (slide-in + pointer-events auto)', () => {
+    vi.mocked(api.useSessions).mockReturnValue({
+      data: { type: 'session_response', payload: { action: 'list', sessions: [] } },
+      isLoading: false,
+      isError: false,
+    } as never)
+
+    renderDrawer(true)
+    const drawer = screen.getByRole('dialog')
+    expect(drawer.className).toContain('translate-x-0')
+    expect(drawer.className).not.toContain('pointer-events-none')
+    expect(drawer.getAttribute('aria-hidden')).toBe('false')
   })
 
   // ── Loading state ───────────────────────────────────────────────

@@ -20,8 +20,6 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
 
   const sessions = sessionsData?.payload?.sessions ?? []
 
-  if (!open) return null
-
   const handleNew = () => {
     setErrorMsg(null)
     newSession.mutate(undefined, {
@@ -77,17 +75,29 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — fades in/out. pointer-events: none when closed so it
+          doesn't intercept clicks on the chat underneath. */}
       <div
-        className="fixed inset-0 z-40"
+        className={`fixed inset-0 z-40 transition-opacity duration-200 ${
+          open ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
         style={{ backgroundColor: 'rgba(26, 24, 23, 0.6)' }}
         onClick={onClose}
+        aria-hidden={!open}
       />
 
-      {/* Drawer */}
+      {/* Drawer — slides in/out from the left. Always mounted so the
+          transition can play on close; pointer-events toggled so the
+          closed drawer doesn't capture clicks. */}
       <div
-        className="fixed left-0 top-0 bottom-0 z-50 w-[280px] bg-surface-elevated border-r border-hairline
-                   flex flex-col shadow-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-label="会话列表"
+        aria-hidden={!open}
+        className={`fixed left-0 top-0 bottom-0 z-50 w-[280px] bg-surface-elevated border-r border-hairline
+                   flex flex-col shadow-lg transition-transform duration-200 ease-out ${
+                     open ? 'translate-x-0' : '-translate-x-full pointer-events-none'
+                   }`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-4 border-b border-hairline-soft">
