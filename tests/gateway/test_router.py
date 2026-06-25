@@ -580,15 +580,18 @@ class TestSession:
         assert "Missing thread_id" in result["payload"]["message"]
 
     async def test_session_list_returns_sessions(self, router, mock_db):
-        """List returns all distinct thread_ids from checkpoints table."""
+        """List returns all distinct thread_ids from checkpoints table,
+        ordered by last activity (MAX(checkpoint_id) DESC)."""
         mock_cursor_list = MagicMock()
+        # Now returns 2 columns: thread_id, MAX(checkpoint_id) as last_cp
         mock_cursor_list.fetchall = AsyncMock(return_value=[
-            ("ws-abc123",), ("ws-def456",),
+            ("ws-abc123", "cp-latest-abc"),
+            ("ws-def456", "cp-latest-def"),
         ])
         mock_cursor_count = MagicMock()
         mock_cursor_count.fetchone = AsyncMock(return_value=(3,))
 
-        # First call: SELECT DISTINCT thread_id → mock_cursor_list
+        # First call: SELECT thread_id, MAX(checkpoint_id) → mock_cursor_list
         # Subsequent calls: SELECT COUNT(*) → mock_cursor_count
         call_count = 0
 
@@ -614,6 +617,9 @@ class TestSession:
         assert sessions[1]["thread_id"] == "ws-def456"
         assert sessions[0]["message_count"] == 2
         assert sessions[1]["message_count"] == 2
+        # last_activity is exposed for future UI use (sorting, display)
+        assert sessions[0]["last_activity"] == "cp-latest-abc"
+        assert sessions[1]["last_activity"] == "cp-latest-def"
 
     async def test_session_current_returns_info(self, router, mock_db):
         """Current returns info for the active thread_id."""
@@ -722,3 +728,66 @@ class TestSession:
         mock_agent.aget_state.assert_called_once_with(
             {"configurable": {"thread_id": "ws-special"}}
         )
+
+    # ── Persistence tests ─────────────────────────────────────────
+
+    async def test_session_new_persists_thread_id(self, router, tmp_path):
+        """new action writes the thread_id to current_session.txt."""
+        result = await router.route(
+            {"type": "session", "payload": {"action": "new"}}
+        )
+        new_tid = result["payload"]["thread_id"]
+
+        persisted = router._current_session_file.read_text(encoding="utf-8")
+        assert persisted == new_tid
+
+    async def test_session_switch_persists_thread_id(
+        self, router, mock_db, tmp_path
+    ):
+        """switch action writes the new thread_id to current_session.txt."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone = AsyncMock(return_value=(1,))
+        mock_db.conn.execute = AsyncMock(return_value=mock_cursor)
+
+        await router.route(
+            {"type": "session", "payload": {"action": "switch", "thread_id": "ws-persist"}}
+        )
+
+        persisted = router._current_session_file.read_text(encoding="utf-8")
+        assert persisted == "ws-persist"
+
+
+# ── Init / persistence (sync tests — no asyncio mark) ─────────────
+
+
+class TestRouterInit:
+    def test_router_loads_persisted_thread_id_on_init(
+        self, mock_engine, mock_memory, mock_db, mock_agent, tmp_path
+    ):
+        """Router __init__ restores the persisted thread_id if present."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        # Pre-write a persisted session
+        (data_dir / "current_session.txt").write_text("ws-restored", encoding="utf-8")
+
+        from lingya.gateway.router import MessageRouter
+        r = MessageRouter(
+            mock_engine, mock_memory, mock_db, str(data_dir), agent=mock_agent
+        )
+
+        assert r._thread_id == "ws-restored"
+
+    def test_router_falls_back_to_default_when_no_persisted_session(
+        self, mock_engine, mock_memory, mock_db, mock_agent, tmp_path
+    ):
+        """Router __init__ uses the constructor default if no persisted file."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        from lingya.gateway.router import MessageRouter
+        r = MessageRouter(
+            mock_engine, mock_memory, mock_db, str(data_dir),
+            agent=mock_agent, thread_id="ws-fallback",
+        )
+
+        assert r._thread_id == "ws-fallback"

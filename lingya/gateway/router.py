@@ -39,7 +39,28 @@ class MessageRouter:
         self._db = db
         self._data_dir = data_dir
         self._agent = agent
-        self._thread_id = thread_id
+        # Persisted current thread_id survives daemon restarts.
+        # Falls back to the constructor arg if no persisted value exists.
+        self._current_session_file = Path(data_dir) / "current_session.txt"
+        self._thread_id = self._load_persisted_thread_id() or thread_id
+
+    # ── Persistence helpers ────────────────────────────────────────
+
+    def _load_persisted_thread_id(self) -> str | None:
+        """Load the persisted current thread_id, if any. Returns None on miss."""
+        try:
+            content = self._current_session_file.read_text(encoding="utf-8").strip()
+            return content or None
+        except (FileNotFoundError, OSError):
+            return None
+
+    def _persist_thread_id(self, thread_id: str) -> None:
+        """Persist the current thread_id so it survives daemon restarts."""
+        try:
+            self._current_session_file.parent.mkdir(parents=True, exist_ok=True)
+            self._current_session_file.write_text(thread_id, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Failed to persist current thread_id: %s", exc)
 
     async def route(self, message: dict) -> dict:
         """Route a message and return a response dict.
@@ -100,6 +121,7 @@ class MessageRouter:
 
         if action == "new":
             self._thread_id = f"ws-{uuid.uuid4().hex[:8]}"
+            self._persist_thread_id(self._thread_id)
             return {
                 "type": "session_response",
                 "payload": {
@@ -123,6 +145,7 @@ class MessageRouter:
                 }
             old_id = self._thread_id
             self._thread_id = thread_id
+            self._persist_thread_id(self._thread_id)
             return {
                 "type": "session_response",
                 "payload": {
@@ -204,19 +227,26 @@ class MessageRouter:
         await self._db.conn.commit()
 
     async def _list_sessions(self) -> list[dict]:
-        """List all sessions (distinct thread_ids from checkpoints table)."""
+        """List all sessions ordered by most recent activity.
+
+        LangGraph's checkpoint_id is a time-ordered UUID (v1), so
+        MAX(checkpoint_id) per thread_id gives the last-activity order
+        without needing a separate timestamp column.
+        """
         try:
             cursor = await self._db.conn.execute(
-                "SELECT DISTINCT thread_id FROM checkpoints "
-                "ORDER BY thread_id DESC"
+                "SELECT thread_id, MAX(checkpoint_id) AS last_cp "
+                "FROM checkpoints GROUP BY thread_id ORDER BY last_cp DESC"
             )
             rows = await cursor.fetchall()
         except Exception:
+            logger.exception("Failed to list sessions from checkpoints table")
             return []
 
         sessions = []
-        for i, row in enumerate(rows):
+        for row in rows:
             tid = row[0] if isinstance(row, tuple) else row["thread_id"]
+            last_cp = row[1] if isinstance(row, tuple) else row["last_cp"]
             # Count checkpoints for this thread
             cnt_cur = await self._db.conn.execute(
                 "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
@@ -232,6 +262,7 @@ class MessageRouter:
                 "thread_id": tid,
                 "label": label,
                 "message_count": message_count,
+                "last_activity": last_cp,
                 "is_current": tid == self._thread_id,
             })
         return sessions

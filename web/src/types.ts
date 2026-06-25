@@ -45,6 +45,8 @@ export interface SessionInfo {
   thread_id: string
   label: string
   message_count: number
+  /** LangGraph checkpoint_id of the last activity — time-ordered UUID (v1) */
+  last_activity?: string
   is_current: boolean
 }
 
