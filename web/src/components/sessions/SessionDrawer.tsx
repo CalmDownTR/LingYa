@@ -39,7 +39,7 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
 
   const handleSwitch = (threadId: string) => {
     setErrorMsg(null)
-    // Snapshot current cache for rollback
+    // Snapshot current cache for rollback (React Query onMutate pattern)
     const previousData = qc.getQueryData(['sessions'])
 
     // Optimistic update — mark clicked session as current immediately
@@ -61,7 +61,9 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
     switchSession.mutate(threadId, {
       onSuccess: () => {
         onSessionChange?.(threadId)
-        onClose()
+        // Delay close so user sees the selection highlight transition
+        // before the drawer slides away. 180ms matches typical micro-interaction timing.
+        setTimeout(() => onClose(), 180)
       },
       onError: (err) => {
         // Roll back optimistic update

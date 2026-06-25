@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SessionDrawer } from './SessionDrawer'
@@ -44,10 +44,6 @@ function renderDrawer(open: boolean, onClose = vi.fn(), onSessionChange = vi.fn(
   }
 }
 
-function mockHookReturn(hook: ReturnType<typeof vi.fn>, value: Record<string, unknown>) {
-  hook.mockReturnValue(value)
-}
-
 // ── Tests ──────────────────────────────────────────────────────────
 
 describe('SessionDrawer', () => {
@@ -73,7 +69,6 @@ describe('SessionDrawer', () => {
   })
 
   // ── Loading state ───────────────────────────────────────────────
-  // BUG #3: Currently shows "还没有会话" while loading — should show a loading indicator
 
   it('shows loading indicator while sessions are loading', () => {
     vi.mocked(api.useSessions).mockReturnValue({
@@ -89,7 +84,6 @@ describe('SessionDrawer', () => {
   })
 
   // ── Error state ─────────────────────────────────────────────────
-  // BUG #3: Currently shows "还没有会话" on error — should show error feedback
 
   it('shows error message when sessions fail to load', () => {
     vi.mocked(api.useSessions).mockReturnValue({
@@ -183,7 +177,8 @@ describe('SessionDrawer', () => {
   })
 
   it('calls onSessionChange and onClose on successful switch', async () => {
-    const user = userEvent.setup()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     const mockMutate = vi.fn()
     vi.mocked(api.useSwitchSession).mockReturnValue({ mutate: mockMutate } as never)
     vi.mocked(api.useSessions).mockReturnValue({
@@ -205,20 +200,28 @@ describe('SessionDrawer', () => {
     const onSuccess = mockMutate.mock.calls[0][1].onSuccess
     onSuccess()
 
+    // onSessionChange fires immediately
     expect(onSessionChange).toHaveBeenCalledWith('ws-bbb22222')
+    // onClose fires after a short delay for selection highlight transition
+    expect(onClose).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(200)
     expect(onClose).toHaveBeenCalled()
+
+    vi.useRealTimers()
   })
 
-  // BUG #2: Optimistic update is not rolled back on failed switch
+  // BUG #2 (fixed): Optimistic update rolls back on failed switch
   it('rolls back optimistic update and shows error on failed switch', async () => {
     const user = userEvent.setup()
     const mockMutate = vi.fn()
     vi.mocked(api.useSwitchSession).mockReturnValue({ mutate: mockMutate } as never)
+
+    const initialData = {
+      type: 'session_response',
+      payload: { action: 'list', sessions: [mockSessionA, mockSessionB] },
+    }
     vi.mocked(api.useSessions).mockReturnValue({
-      data: {
-        type: 'session_response',
-        payload: { action: 'list', sessions: [mockSessionA, mockSessionB] },
-      },
+      data: initialData,
       isLoading: false,
       isError: false,
     } as never)
@@ -226,6 +229,9 @@ describe('SessionDrawer', () => {
     const onSessionChange = vi.fn()
     const onClose = vi.fn()
     const { qc } = renderDrawer(true, onClose, onSessionChange)
+
+    // Pre-populate the cache so handleSwitch's snapshot is truthy
+    qc.setQueryData(['sessions'], initialData)
     const setQueryDataSpy = vi.spyOn(qc, 'setQueryData')
 
     // Cache should have the original data before click
@@ -233,16 +239,22 @@ describe('SessionDrawer', () => {
 
     await user.click(screen.getByText('会话 bbb22222'))
 
-    // onError fires (currently NOT handled — this is the bug)
-    const onError = mockMutate.mock.calls[0][1].onError
-    expect(onError).toBeDefined() // ← FAILS: current code doesn't pass onError
+    // Optimistic update sets B as current
+    expect(setQueryDataSpy).toHaveBeenCalledTimes(1)
 
-    // When fix is applied, verify rollback:
-    // onError?.(new Error('Switch failed'))
-    // expect(setQueryDataSpy).toHaveBeenCalledTimes(2) // 1 for optimistic, 1 for rollback
-    // expect(onSessionChange).not.toHaveBeenCalled()
-    // expect(onClose).not.toHaveBeenCalled()
-    // expect(screen.getByText(/切换失败/)).toBeInTheDocument()
+    const onError = mockMutate.mock.calls[0][1].onError
+    expect(onError).toBeDefined()
+    act(() => {
+      onError(new Error('Switch failed'))
+    })
+
+    // Rollback: setQueryData called again with original cache
+    expect(setQueryDataSpy).toHaveBeenCalledTimes(2)
+    expect(qc.getQueryData(['sessions'])).toEqual(originalCache)
+    expect(onSessionChange).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    // Error message comes from err.message when available
+    expect(screen.getByText(/Switch failed/)).toBeInTheDocument()
   })
 
   // ── New session ─────────────────────────────────────────────────
@@ -295,7 +307,7 @@ describe('SessionDrawer', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
-  // BUG #4: No error feedback when new session creation fails
+  // BUG #4 (fixed): Error feedback when new session creation fails
   it('shows error when new session creation fails', async () => {
     const user = userEvent.setup()
     const mockMutate = vi.fn()
@@ -315,15 +327,16 @@ describe('SessionDrawer', () => {
 
     await user.click(screen.getByText('新建'))
 
-    // onError fires (currently NOT handled — this is the bug)
     const callOpts = mockMutate.mock.calls[0][1]
-    expect(callOpts.onError).toBeDefined() // ← FAILS: current code doesn't pass onError
+    expect(callOpts.onError).toBeDefined()
+    act(() => {
+      callOpts.onError(new Error('Create failed'))
+    })
 
-    // When fix is applied:
-    // callOpts.onError(new Error('Create failed'))
-    // expect(onSessionChange).not.toHaveBeenCalled()
-    // expect(onClose).not.toHaveBeenCalled()
-    // expect(screen.getByText(/创建失败/)).toBeInTheDocument()
+    expect(onSessionChange).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    // Error message comes from err.message when available
+    expect(screen.getByText(/Create failed/)).toBeInTheDocument()
   })
 
   // ── Delete session ──────────────────────────────────────────────
