@@ -21,7 +21,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lingya.gateway.auth import create_auth_dependency
 
@@ -38,6 +38,28 @@ class ChatRequest(BaseModel):
     text: str
 
 
+class SessionRequest(BaseModel):
+    action: str = "new"
+    thread_id: str | None = None
+
+
+class OceanUpdateRequest(BaseModel):
+    O: float = Field(ge=0.0, le=1.0)
+    C: float = Field(ge=0.0, le=1.0)
+    E: float = Field(ge=0.0, le=1.0)
+    A: float = Field(ge=0.0, le=1.0)
+    N: float = Field(ge=0.0, le=1.0)
+
+
+class IdentityUpdateRequest(BaseModel):
+    identity: str | None = None
+    core_belief: str | None = None
+
+
+class ToneUpdateRequest(BaseModel):
+    preset: str
+
+
 # ── App factory ───────────────────────────────────────────────────────
 
 
@@ -45,7 +67,7 @@ def create_app(
     router: Any = None,
     auth_enabled: bool = True,
     title: str = "LingYa Gateway",
-    version: str = "0.8.3",
+    version: str = "0.9.0",
     shutdown_callback: Any = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
@@ -207,6 +229,7 @@ def create_app(
 
     @app.post("/session")
     async def post_session(
+        body: SessionRequest | None = None,
         action: str = Query("new"),
         _auth: bool = auth,
     ):
@@ -215,7 +238,109 @@ def create_app(
                 {"type": "error", "payload": {"message": "Router not initialized"}},
                 status_code=503,
             )
-        return await router._handle_session({"action": action})
+        # JSON body takes precedence over query param
+        effective_action = body.action if body is not None else action
+        effective_thread_id = body.thread_id if body is not None else None
+
+        payload: dict = {"action": effective_action}
+        if effective_thread_id:
+            payload["thread_id"] = effective_thread_id
+        return await router._handle_session(payload)
+
+    @app.get("/session/list")
+    async def list_sessions(_auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_session({"action": "list"})
+
+    @app.get("/session/current")
+    async def current_session(_auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_session({"action": "current"})
+
+    @app.get("/session/history")
+    async def session_history(
+        thread_id: str | None = Query(None, description="Thread ID (defaults to current)"),
+        _auth: bool = auth,
+    ):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        payload: dict = {"action": "history"}
+        if thread_id:
+            payload["thread_id"] = thread_id
+        return await router._handle_session(payload)
+
+    # ── Settings ────────────────────────────────────────────────────────
+
+    @app.get("/settings")
+    async def get_settings(_auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_settings({"action": "get"})
+
+    @app.put("/settings/ocean")
+    async def update_ocean(body: OceanUpdateRequest, _auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_settings({
+            "action": "update_ocean",
+            "ocean": body.model_dump(),
+        })
+
+    @app.put("/settings/identity")
+    async def update_identity(body: IdentityUpdateRequest, _auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        identity_data = body.model_dump(exclude_none=True)
+        if not identity_data:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "No fields to update"}},
+                status_code=400,
+            )
+        return await router._handle_settings({
+            "action": "update_identity",
+            "identity": identity_data,
+        })
+
+    @app.put("/settings/tone")
+    async def update_tone(body: ToneUpdateRequest, _auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_settings({
+            "action": "update_tone",
+            "preset": body.preset,
+        })
+
+    @app.post("/settings/reset")
+    async def reset_settings(_auth: bool = auth):
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_settings({"action": "reset"})
 
     # ── Stats (deprecated) ─────────────────────────────────────────
 
@@ -236,5 +361,17 @@ def create_app(
         if shutdown_callback is not None:
             shutdown_callback()
         return {"status": "shutting_down"}
+
+    # ── Static Web UI (SPA fallback) ─────────────────────────────────
+    # Mount MUST be after all API routes. FastAPI matches explicit routes
+    # first, then falls through to StaticFiles. html=True enables SPA
+    # fallback — unknown paths like /settings serve index.html.
+    from pathlib import Path
+
+    from fastapi.staticfiles import StaticFiles
+
+    web_dist = Path("web/dist")
+    if web_dist.exists() and web_dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(web_dist), html=True), name="web")
 
     return app

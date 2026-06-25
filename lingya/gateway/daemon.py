@@ -126,6 +126,16 @@ class GatewayDaemon:
 
         print(f"LingYa daemon started (PID: {os.getpid()}, port: {self.port})")
 
+        # Check for Web UI
+        web_dist = Path("web/dist")
+        if web_dist.exists():
+            print(f"Web UI available at http://localhost:{self.port}")
+        else:
+            print(
+                "Note: Web UI not built. "
+                "To enable: cd web && npm install && npm run build"
+            )
+
         # 5. Wait for shutdown signal
         loop = asyncio.get_event_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):

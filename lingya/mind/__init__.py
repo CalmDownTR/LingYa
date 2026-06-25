@@ -12,7 +12,7 @@ from lingya.mind.config import (
     ToneMatrix,
     load_mind_config,
 )
-from lingya.mind.engine import MindEngine, build_static_prompt
+from lingya.mind.engine import MindEngine, TONE_PRESETS, build_static_prompt
 from lingya.mind.state import MindState, PADPoint
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "MindState",
     "PADBaseline",
     "PADPoint",
+    "TONE_PRESETS",
     "ToneMatrix",
     "build_static_prompt",
     "load_mind_config",

@@ -41,6 +41,7 @@ tests/output/
 
 # Web UI
 web/node_modules/
+web/dist/
 
 # Environment (secrets)
 .env

@@ -48,6 +48,15 @@ STATIC_PROMPT_SKELETON = """\
 - Storing information about the user is NOT flattery — it is a core function of long-term companionship."""
 
 
+TONE_PRESETS: dict[str, dict[str, int | float]] = {
+    "warm":       {"warmth": 80, "formality": 40, "humor": 0.3},
+    "neutral":    {"warmth": 50, "formality": 50, "humor": 0.1},
+    "cool":       {"warmth": 25, "formality": 75, "humor": 0.0},
+    "passionate": {"warmth": 90, "formality": 30, "humor": 0.4},
+    "gentle":     {"warmth": 70, "formality": 45, "humor": 0.2},
+}
+
+
 def build_static_prompt(config: MindConfig) -> str:
     """Build the static (non-dynamic) portion of the system prompt."""
     guardrails = "\n".join(f"- {r}" for r in config.behavior_guardrails)
@@ -70,6 +79,7 @@ class MindEngine:
         event_bus: "EventBus | None" = None,
     ) -> None:
         self.config = config
+        self._original_config = config.model_copy(deep=True)
         self.memory = memory_store
         self._llm_call = llm_call
         self._embedding_fn = embedding_fn
@@ -295,6 +305,76 @@ class MindEngine:
             )
             return False
         return True
+
+    async def reload_config(self, config_partial: dict) -> None:
+        """Hot-reload partial config without restarting the daemon.
+
+        config_partial may contain:
+          - ocean: dict of {openness, conscientiousness, extraversion,
+                            agreeableness, neuroticism}
+          - identity: dict of {identity?, core_belief?}
+          - tone_preset: str from TONE_PRESETS keys
+          - reset: bool — restore original config from file
+        """
+        changed = False
+
+        if config_partial.get("reset"):
+            self.config = self._original_config.model_copy(deep=True)
+            self._current_tone = self.config.tone_matrix.model_copy()
+            self.state = MindState.from_config(self.config)
+            self._static_prompt = build_static_prompt(self.config)
+            changed = True
+
+        if "ocean" in config_partial:
+            ocean_data = config_partial["ocean"]
+            field_map = {
+                "openness": "openness", "conscientiousness": "conscientiousness",
+                "extraversion": "extraversion", "agreeableness": "agreeableness",
+                "neuroticism": "neuroticism",
+            }
+            for api_key, attr_name in field_map.items():
+                if api_key in ocean_data:
+                    val = float(ocean_data[api_key])
+                    setattr(self.config.ocean, attr_name, val)
+                    setattr(self.state.current_ocean, attr_name, val)
+            # Recalculate PAD baseline from new OCEAN
+            from lingya.mind.affect import ocean_to_pad_baseline
+
+            new_baseline = ocean_to_pad_baseline(self.state.current_ocean)
+            self.state.current_pad = PADPoint(
+                pleasure=new_baseline.pleasure,
+                arousal=new_baseline.arousal,
+                dominance=new_baseline.dominance,
+            )
+            changed = True
+
+        if "identity" in config_partial:
+            id_data = config_partial["identity"]
+            if "identity" in id_data:
+                self.config.identity.identity = id_data["identity"]
+                changed = True
+            if "core_belief" in id_data:
+                self.config.identity.core_belief = id_data["core_belief"]
+                changed = True
+
+        if "tone_preset" in config_partial:
+            preset_name = config_partial["tone_preset"]
+            if preset_name not in TONE_PRESETS:
+                valid = list(TONE_PRESETS.keys())
+                raise ValueError(
+                    f"Unknown tone preset: {preset_name}. Valid: {valid}"
+                )
+            preset = TONE_PRESETS[preset_name]
+            self.config.tone_matrix.warmth = int(preset["warmth"])
+            self.config.tone_matrix.formality = int(preset["formality"])
+            self.config.tone_matrix.humor = float(preset["humor"])
+            self._current_tone = self.config.tone_matrix.model_copy()
+            changed = True
+
+        if changed:
+            self._static_prompt = build_static_prompt(self.config)
+            if self._db is not None:
+                await self.save_state(self._db)
 
     # ── Persistence ─────────────────────────────────────────────────
 

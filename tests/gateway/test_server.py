@@ -276,6 +276,226 @@ class TestSessionEndpoint:
         assert resp.status_code == 200
         router._handle_session.assert_called_with({"action": "new"})
 
+    def test_session_switch_json_body(self):
+        router = MagicMock()
+        router._handle_session = AsyncMock(return_value={
+            "type": "session_response",
+            "payload": {"action": "switch", "thread_id": "ws-xyz"},
+        })
+        client = _make_test_client(router=router)
+        resp = client.post("/session", json={"action": "switch", "thread_id": "ws-xyz"})
+        assert resp.status_code == 200
+        router._handle_session.assert_called_with(
+            {"action": "switch", "thread_id": "ws-xyz"}
+        )
+
+    def test_session_switch_backward_compat_query_param(self):
+        """POST /session?action=new still works without JSON body."""
+        router = MagicMock()
+        router._handle_session = AsyncMock(return_value={
+            "type": "session_response",
+            "payload": {"action": "new", "thread_id": "ws-abc"},
+        })
+        client = _make_test_client(router=router)
+        resp = client.post("/session?action=new")
+        assert resp.status_code == 200
+        router._handle_session.assert_called_with({"action": "new"})
+
+    def test_session_list_endpoint(self):
+        router = MagicMock()
+        router._handle_session = AsyncMock(return_value={
+            "type": "session_response",
+            "payload": {"action": "list", "sessions": []},
+        })
+        client = _make_test_client(router=router)
+        resp = client.get("/session/list")
+        assert resp.status_code == 200
+        router._handle_session.assert_called_with({"action": "list"})
+
+    def test_session_list_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.get("/session/list")
+        assert resp.status_code == 503
+
+    def test_session_current_endpoint(self):
+        router = MagicMock()
+        router._handle_session = AsyncMock(return_value={
+            "type": "session_response",
+            "payload": {"action": "current", "session": {"thread_id": "ws-default", "message_count": 0, "is_current": True}},
+        })
+        client = _make_test_client(router=router)
+        resp = client.get("/session/current")
+        assert resp.status_code == 200
+        router._handle_session.assert_called_with({"action": "current"})
+
+    def test_session_current_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.get("/session/current")
+        assert resp.status_code == 503
+
+    def test_session_history_endpoint(self):
+        router = MagicMock()
+        router._handle_session = AsyncMock(return_value={
+            "type": "session_response",
+            "payload": {"action": "history", "thread_id": "ws-abc", "messages": []},
+        })
+        client = _make_test_client(router=router)
+        resp = client.get("/session/history")
+        assert resp.status_code == 200
+        router._handle_session.assert_called_with({"action": "history"})
+
+    def test_session_history_with_thread_id_query(self):
+        router = MagicMock()
+        router._handle_session = AsyncMock(return_value={
+            "type": "session_response",
+            "payload": {"action": "history", "thread_id": "ws-xyz", "messages": []},
+        })
+        client = _make_test_client(router=router)
+        resp = client.get("/session/history?thread_id=ws-xyz")
+        assert resp.status_code == 200
+        router._handle_session.assert_called_with({"action": "history", "thread_id": "ws-xyz"})
+
+    def test_session_history_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.get("/session/history")
+        assert resp.status_code == 503
+
+
+# ── Settings endpoints ─────────────────────────────────────────────
+
+
+class TestSettingsEndpoint:
+    def test_get_settings_returns_config(self):
+        router = MagicMock()
+        router._handle_settings = AsyncMock(return_value={
+            "type": "settings_response",
+            "payload": {
+                "ocean": {"openness": 0.5, "conscientiousness": 0.5,
+                          "extraversion": 0.5, "agreeableness": 0.5, "neuroticism": 0.5},
+                "tone": {"warmth": 50, "formality": 50, "humor": 0.1},
+                "identity": {"identity": "Test", "core_belief": "Help"},
+                "available_presets": ["warm", "neutral", "cool", "passionate", "gentle"],
+            },
+        })
+        client = _make_test_client(router=router)
+        resp = client.get("/settings")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "settings_response"
+        assert "ocean" in data["payload"]
+
+    def test_get_settings_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.get("/settings")
+        assert resp.status_code == 503
+
+    def test_put_ocean_valid_updates(self):
+        router = MagicMock()
+        router._handle_settings = AsyncMock(return_value={
+            "type": "settings_response",
+            "payload": {"ok": True, "ocean": {"openness": 0.8, "conscientiousness": 0.6,
+                         "extraversion": 0.4, "agreeableness": 0.9, "neuroticism": 0.2}},
+        })
+        client = _make_test_client(router=router)
+        resp = client.put("/settings/ocean", json={
+            "O": 0.8, "C": 0.6, "E": 0.4, "A": 0.9, "N": 0.2,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["payload"]["ok"] is True
+
+    def test_put_ocean_out_of_range_returns_422(self):
+        """FastAPI validates Pydantic Field(ge=0, le=1)."""
+        router = MagicMock()
+        client = _make_test_client(router=router)
+        resp = client.put("/settings/ocean", json={
+            "O": 1.5, "C": 0.6, "E": 0.4, "A": 0.9, "N": 0.2,
+        })
+        assert resp.status_code == 422
+
+    def test_put_ocean_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.put("/settings/ocean", json={
+            "O": 0.8, "C": 0.6, "E": 0.4, "A": 0.9, "N": 0.2,
+        })
+        assert resp.status_code == 503
+
+    def test_put_identity_partial_update(self):
+        router = MagicMock()
+        router._handle_settings = AsyncMock(return_value={
+            "type": "settings_response",
+            "payload": {"ok": True},
+        })
+        client = _make_test_client(router=router)
+        resp = client.put("/settings/identity", json={"identity": "New Name"})
+        assert resp.status_code == 200
+
+    def test_put_identity_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.put("/settings/identity", json={"identity": "New"})
+        assert resp.status_code == 503
+
+    def test_put_tone_valid_preset(self):
+        router = MagicMock()
+        router._handle_settings = AsyncMock(return_value={
+            "type": "settings_response",
+            "payload": {"ok": True, "tone_preset": "warm"},
+        })
+        client = _make_test_client(router=router)
+        resp = client.put("/settings/tone", json={"preset": "warm"})
+        assert resp.status_code == 200
+        assert resp.json()["payload"]["ok"] is True
+
+    def test_put_tone_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.put("/settings/tone", json={"preset": "warm"})
+        assert resp.status_code == 503
+
+    def test_post_settings_reset(self):
+        router = MagicMock()
+        router._handle_settings = AsyncMock(return_value={
+            "type": "settings_response",
+            "payload": {"ok": True, "ocean": {"openness": 0.5, "conscientiousness": 0.5,
+                         "extraversion": 0.5, "agreeableness": 0.5, "neuroticism": 0.5}},
+        })
+        client = _make_test_client(router=router)
+        resp = client.post("/settings/reset")
+        assert resp.status_code == 200
+        assert resp.json()["payload"]["ok"] is True
+
+    def test_post_settings_reset_no_router_returns_503(self):
+        client = _make_test_client(router=None)
+        resp = client.post("/settings/reset")
+        assert resp.status_code == 503
+
+
+# ── Stats endpoint ──────────────────────────────────────────────────
+
+
+# ── StaticFiles mount ──────────────────────────────────────────────
+
+
+class TestStaticFiles:
+    def test_api_endpoint_still_works_with_static_mount(self):
+        """API endpoints take priority over StaticFiles mount."""
+        router = MagicMock()
+        router._handle_mind = AsyncMock(return_value={
+            "type": "mind_state",
+            "payload": {"pad": {"pleasure": 0.5, "arousal": 0.3, "dominance": 0.7}},
+        })
+        client = _make_test_client(router=router)
+        # /mind should always return JSON, not HTML
+        resp = client.get("/mind")
+        assert resp.status_code == 200
+        assert resp.headers.get("content-type", "").startswith("application/json")
+
+    def test_health_returns_json_not_html(self):
+        """Health endpoint returns JSON even with static mount."""
+        client = _make_test_client()
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+
 
 # ── Stats endpoint ──────────────────────────────────────────────────
 

@@ -186,3 +186,193 @@ class TestMindEngine:
         assert engine.state.turn_counter == 5
         assert len(engine.state.recent_emotions) == 5
         assert len(engine.state.pad_history) == 5
+
+
+class TestReloadConfig:
+    """Tests for MindEngine.reload_config() — hot reload without restart."""
+
+    async def test_reload_ocean_updates_config_and_state(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        original_openness = engine.config.ocean.openness
+        new_openness = 0.9 if original_openness < 0.8 else 0.2
+
+        await engine.reload_config({"ocean": {"openness": new_openness}})
+
+        assert engine.config.ocean.openness == new_openness
+        assert engine.state.current_ocean.openness == new_openness
+
+    async def test_reload_ocean_recalculates_pad_baseline(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+        from lingya.mind.affect import ocean_to_pad_baseline
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        # Drift ocean far from current
+        await engine.reload_config({"ocean": {
+            "openness": 0.9, "conscientiousness": 0.1,
+            "extraversion": 0.9, "agreeableness": 0.1, "neuroticism": 0.9,
+        }})
+        expected_baseline = ocean_to_pad_baseline(engine.config.ocean)
+
+        assert engine.state.current_pad.pleasure == expected_baseline.pleasure
+        assert engine.state.current_pad.arousal == expected_baseline.arousal
+        assert engine.state.current_pad.dominance == expected_baseline.dominance
+
+    async def test_reload_identity_rebuilds_static_prompt(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        new_identity = "Test Identity 测试身份"
+        await engine.reload_config({"identity": {"identity": new_identity}})
+
+        assert engine.config.identity.identity == new_identity
+        assert new_identity in engine._static_prompt
+
+    async def test_reload_identity_partial_update_only_identity(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        original_belief = engine.config.identity.core_belief
+        new_identity = "Partial Identity Update"
+
+        await engine.reload_config({"identity": {"identity": new_identity}})
+
+        assert engine.config.identity.identity == new_identity
+        # core_belief should be unchanged
+        assert engine.config.identity.core_belief == original_belief
+
+    async def test_reload_tone_preset_changes_tone_matrix(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+
+        await engine.reload_config({"tone_preset": "passionate"})
+
+        assert engine.config.tone_matrix.warmth == 90
+        assert engine.config.tone_matrix.formality == 30
+        assert engine.config.tone_matrix.humor == 0.4
+        # _current_tone should also be updated
+        assert engine._current_tone.warmth == 90
+        assert engine._current_tone.formality == 30
+
+    async def test_reload_tone_preset_invalid_raises(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+
+        with pytest.raises(ValueError, match="Unknown tone preset"):
+            await engine.reload_config({"tone_preset": "nonexistent"})
+
+    async def test_reset_restores_original_config(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        original_openness = engine.config.ocean.openness
+        original_identity = engine.config.identity.identity
+
+        # Mutate config
+        await engine.reload_config({"ocean": {"openness": 0.99}})
+        await engine.reload_config({"identity": {"identity": "changed"}})
+        assert engine.config.ocean.openness == 0.99
+        assert engine.config.identity.identity == "changed"
+
+        # Reset
+        await engine.reload_config({"reset": True})
+
+        assert engine.config.ocean.openness == original_openness
+        assert engine.config.identity.identity == original_identity
+
+    async def test_reset_rebuilds_static_prompt(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine, build_static_prompt
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        await engine.reload_config({"identity": {"identity": "changed"}})
+        await engine.reload_config({"reset": True})
+
+        expected_prompt = build_static_prompt(mind_config)
+        assert engine._static_prompt == expected_prompt
+
+    async def test_reload_no_db_does_not_crash(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        # _db is None by default
+        assert engine._db is None
+
+        # Should not raise
+        await engine.reload_config({"ocean": {"openness": 0.7}})
+        assert engine.config.ocean.openness == 0.7
+
+    async def test_reload_with_db_persists(self, mind_config, mock_llm, mock_memory, db):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.set_db(db)
+
+        await engine.reload_config({"ocean": {"openness": 0.88}})
+
+        # Load into a new engine to verify persistence
+        engine2 = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        restored = await engine2.load_state(db)
+        assert restored is True
+        assert engine2.state.current_ocean.openness == 0.88
+
+    async def test_tone_presets_exported_from_module(self):
+        from lingya.mind import TONE_PRESETS
+
+        assert isinstance(TONE_PRESETS, dict)
+        assert "warm" in TONE_PRESETS
+        assert "neutral" in TONE_PRESETS
+        assert "cool" in TONE_PRESETS
+        assert "passionate" in TONE_PRESETS
+        assert "gentle" in TONE_PRESETS
+        # Verify structure
+        warm = TONE_PRESETS["warm"]
+        assert "warmth" in warm
+        assert "formality" in warm
+        assert "humor" in warm

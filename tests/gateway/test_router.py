@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -516,3 +516,209 @@ class TestSession:
 
         assert result["type"] == "error"
         assert "Unknown session action" in result["payload"]["message"]
+
+    async def test_session_switch_valid_thread_id(self, router, mock_db):
+        """Switch to an existing thread_id updates internal state."""
+        # Mock: the thread exists
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone = AsyncMock(return_value=(1,))
+        mock_db.conn.execute = AsyncMock(return_value=mock_cursor)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "switch", "thread_id": "ws-existing"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["action"] == "switch"
+        assert result["payload"]["thread_id"] == "ws-existing"
+        assert router._thread_id == "ws-existing"
+
+    async def test_session_switch_missing_thread_id_returns_error(self, router):
+        """Switch without thread_id returns error."""
+        result = await router.route(
+            {"type": "session", "payload": {"action": "switch"}}
+        )
+
+        assert result["type"] == "error"
+        assert "Missing thread_id" in result["payload"]["message"]
+
+    async def test_session_switch_nonexistent_thread_returns_error(self, router, mock_db):
+        """Switch to a thread_id that doesn't exist returns error."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone = AsyncMock(return_value=(0,))
+        mock_db.conn.execute = AsyncMock(return_value=mock_cursor)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "switch", "thread_id": "ws-nonexistent"}}
+        )
+
+        assert result["type"] == "error"
+        assert "not found" in result["payload"]["message"]
+
+    async def test_session_delete_returns_error_when_current(self, router, mock_db):
+        """Cannot delete the currently active session."""
+        current_tid = router._thread_id
+        # Mock: the thread exists
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone = AsyncMock(return_value=(1,))
+        mock_db.conn.execute = AsyncMock(return_value=mock_cursor)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "delete", "thread_id": current_tid}}
+        )
+
+        assert result["type"] == "error"
+        assert "Cannot delete current session" in result["payload"]["message"]
+
+    async def test_session_delete_missing_thread_id_returns_error(self, router):
+        """Delete without thread_id returns error."""
+        result = await router.route(
+            {"type": "session", "payload": {"action": "delete"}}
+        )
+
+        assert result["type"] == "error"
+        assert "Missing thread_id" in result["payload"]["message"]
+
+    async def test_session_list_returns_sessions(self, router, mock_db):
+        """List returns all distinct thread_ids from checkpoints table."""
+        mock_cursor_list = MagicMock()
+        mock_cursor_list.fetchall = AsyncMock(return_value=[
+            ("ws-abc123",), ("ws-def456",),
+        ])
+        mock_cursor_count = MagicMock()
+        mock_cursor_count.fetchone = AsyncMock(return_value=(3,))
+
+        # First call: SELECT DISTINCT thread_id → mock_cursor_list
+        # Subsequent calls: SELECT COUNT(*) → mock_cursor_count
+        call_count = 0
+
+        async def _execute(sql, params=None):
+            nonlocal call_count
+            if call_count == 0:
+                call_count += 1
+                return mock_cursor_list
+            else:
+                return mock_cursor_count
+
+        mock_db.conn.execute = _execute
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "list"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["action"] == "list"
+        assert len(result["payload"]["sessions"]) == 2
+        sessions = result["payload"]["sessions"]
+        assert sessions[0]["thread_id"] == "ws-abc123"
+        assert sessions[1]["thread_id"] == "ws-def456"
+        assert sessions[0]["message_count"] == 2
+        assert sessions[1]["message_count"] == 2
+
+    async def test_session_current_returns_info(self, router, mock_db):
+        """Current returns info for the active thread_id."""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone = AsyncMock(return_value=(3,))
+        mock_db.conn.execute = AsyncMock(return_value=mock_cursor)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "current"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["action"] == "current"
+        assert result["payload"]["session"]["thread_id"] == router._thread_id
+        assert result["payload"]["session"]["is_current"] is True
+
+    async def test_session_history_returns_messages(self, router, mock_agent):
+        """History action loads messages from agent state."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        mock_state = MagicMock()
+        mock_state.values = {
+            "messages": [
+                HumanMessage(content="你好"),
+                AIMessage(content="你好呀~"),
+                HumanMessage(content="今天怎么样"),
+                AIMessage(content="还不错呢"),
+            ]
+        }
+        mock_agent.aget_state = AsyncMock(return_value=mock_state)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "history"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["action"] == "history"
+        msgs = result["payload"]["messages"]
+        assert len(msgs) == 4
+        assert msgs[0] == {"role": "user", "content": "你好"}
+        assert msgs[1] == {"role": "her", "content": "你好呀~"}
+        assert msgs[2] == {"role": "user", "content": "今天怎么样"}
+        assert msgs[3] == {"role": "her", "content": "还不错呢"}
+
+    async def test_session_history_filters_system_and_tool_messages(self, router, mock_agent):
+        """History skips SystemMessage and ToolMessage, returns only user + her."""
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+        mock_state = MagicMock()
+        mock_state.values = {
+            "messages": [
+                SystemMessage(content="system prompt"),
+                HumanMessage(content="hi"),
+                AIMessage(content="hello"),
+                ToolMessage(content="tool result", tool_call_id="tc1"),
+                HumanMessage(content="thanks"),
+                AIMessage(content="np"),
+            ]
+        }
+        mock_agent.aget_state = AsyncMock(return_value=mock_state)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "history"}}
+        )
+
+        msgs = result["payload"]["messages"]
+        assert len(msgs) == 4
+        roles = [m["role"] for m in msgs]
+        assert roles == ["user", "her", "user", "her"]
+        assert msgs[0]["content"] == "hi"
+        assert msgs[-1]["content"] == "np"
+
+    async def test_session_history_empty_state(self, router, mock_agent):
+        """History returns empty list when agent has no state."""
+        mock_agent.aget_state = AsyncMock(return_value=None)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "history"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["messages"] == []
+
+    async def test_session_history_no_agent_returns_empty(self, router_no_agent):
+        """History returns empty list when agent is None."""
+        result = await router_no_agent.route(
+            {"type": "session", "payload": {"action": "history"}}
+        )
+
+        assert result["type"] == "session_response"
+        assert result["payload"]["messages"] == []
+
+    async def test_session_history_with_explicit_thread_id(self, router, mock_agent):
+        """History uses explicit thread_id when provided."""
+        from langchain_core.messages import HumanMessage
+
+        mock_state = MagicMock()
+        mock_state.values = {"messages": [HumanMessage(content="test")]}
+        mock_agent.aget_state = AsyncMock(return_value=mock_state)
+
+        result = await router.route(
+            {"type": "session", "payload": {"action": "history", "thread_id": "ws-special"}}
+        )
+
+        assert result["payload"]["thread_id"] == "ws-special"
+        mock_agent.aget_state.assert_called_once_with(
+            {"configurable": {"thread_id": "ws-special"}}
+        )

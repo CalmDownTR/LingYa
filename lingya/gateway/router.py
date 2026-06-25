@@ -54,6 +54,7 @@ class MessageRouter:
             "memory": self._handle_memory,
             "chat": self._handle_chat,
             "session": self._handle_session,
+            "settings": self._handle_settings,
             "stats": self._handle_stats,
         }
 
@@ -90,7 +91,7 @@ class MessageRouter:
         }
 
     async def _handle_session(self, payload: dict) -> dict:
-        """Manage conversation sessions — start new, list, or switch."""
+        """Manage conversation sessions — new, switch, delete, list, current."""
         action = payload.get("action", "new")
 
         if action == "new":
@@ -103,9 +104,282 @@ class MessageRouter:
                 },
             }
 
+        if action == "switch":
+            thread_id = payload.get("thread_id")
+            if not thread_id:
+                return {
+                    "type": "error",
+                    "payload": {"message": "Missing thread_id for switch"},
+                }
+            exists = await self._thread_exists(thread_id)
+            if not exists:
+                return {
+                    "type": "error",
+                    "payload": {"message": f"Session {thread_id} not found"},
+                }
+            old_id = self._thread_id
+            self._thread_id = thread_id
+            return {
+                "type": "session_response",
+                "payload": {
+                    "action": "switch",
+                    "thread_id": thread_id,
+                    "previous": old_id,
+                },
+            }
+
+        if action == "delete":
+            thread_id = payload.get("thread_id")
+            if not thread_id:
+                return {
+                    "type": "error",
+                    "payload": {"message": "Missing thread_id for delete"},
+                }
+            if thread_id == self._thread_id:
+                return {
+                    "type": "error",
+                    "payload": {"message": "Cannot delete current session"},
+                }
+            await self._delete_thread(thread_id)
+            return {
+                "type": "session_response",
+                "payload": {
+                    "action": "delete",
+                    "thread_id": thread_id,
+                    "deleted": True,
+                },
+            }
+
+        if action == "list":
+            sessions = await self._list_sessions()
+            return {
+                "type": "session_response",
+                "payload": {"action": "list", "sessions": sessions},
+            }
+
+        if action == "current":
+            info = await self._session_info(self._thread_id)
+            return {
+                "type": "session_response",
+                "payload": {"action": "current", "session": info},
+            }
+
+        if action == "history":
+            thread_id = payload.get("thread_id", self._thread_id)
+            messages = await self._load_history(thread_id)
+            return {
+                "type": "session_response",
+                "payload": {"action": "history", "thread_id": thread_id, "messages": messages},
+            }
+
         return {
             "type": "error",
             "payload": {"message": f"Unknown session action: {action}"},
+        }
+
+    # ── Session helpers ────────────────────────────────────────────
+
+    async def _thread_exists(self, thread_id: str) -> bool:
+        """Check if a thread_id exists in the checkpoints table."""
+        try:
+            cursor = await self._db.conn.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            return (row[0] if row else 0) > 0
+        except Exception:
+            return False
+
+    async def _delete_thread(self, thread_id: str) -> None:
+        """Delete all checkpoints for a thread_id."""
+        await self._db.conn.execute(
+            "DELETE FROM checkpoints WHERE thread_id = ?",
+            (thread_id,),
+        )
+        await self._db.conn.commit()
+
+    async def _list_sessions(self) -> list[dict]:
+        """List all sessions (distinct thread_ids from checkpoints table)."""
+        try:
+            cursor = await self._db.conn.execute(
+                "SELECT DISTINCT thread_id FROM checkpoints "
+                "ORDER BY thread_id DESC"
+            )
+            rows = await cursor.fetchall()
+        except Exception:
+            return []
+
+        sessions = []
+        for i, row in enumerate(rows):
+            tid = row[0] if isinstance(row, tuple) else row["thread_id"]
+            # Count checkpoints for this thread
+            cnt_cur = await self._db.conn.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
+                (tid,),
+            )
+            cnt_row = await cnt_cur.fetchone()
+            count = cnt_row[0] if cnt_row else 0
+            message_count = max(0, count - 1)  # Subtract initial checkpoint
+            # Generate a readable label
+            short_id = tid[-8:] if len(tid) > 8 else tid
+            label = f"会话 {short_id}"
+            sessions.append({
+                "thread_id": tid,
+                "label": label,
+                "message_count": message_count,
+                "is_current": tid == self._thread_id,
+            })
+        return sessions
+
+    async def _session_info(self, thread_id: str) -> dict | None:
+        """Get info for a specific session."""
+        try:
+            cursor = await self._db.conn.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            count = row[0] if row else 0
+            short_id = thread_id[-8:] if len(thread_id) > 8 else thread_id
+            return {
+                "thread_id": thread_id,
+                "label": f"会话 {short_id}",
+                "message_count": max(0, count - 1),
+                "is_current": thread_id == self._thread_id,
+            }
+        except Exception:
+            return None
+
+    async def _load_history(self, thread_id: str) -> list[dict]:
+        """Load conversation history for a thread_id from LangGraph checkpointer."""
+        if self._agent is None:
+            return []
+        try:
+            state = await self._agent.aget_state(
+                {"configurable": {"thread_id": thread_id}}
+            )
+        except Exception:
+            return []
+
+        if state is None or not state.values:
+            return []
+
+        raw_messages = state.values.get("messages", [])
+        messages: list[dict] = []
+        for msg in raw_messages:
+            type_name = msg.__class__.__name__
+            if type_name == "HumanMessage":
+                messages.append({
+                    "role": "user",
+                    "content": getattr(msg, "content", ""),
+                })
+            elif type_name == "AIMessage":
+                messages.append({
+                    "role": "her",
+                    "content": getattr(msg, "content", ""),
+                })
+            # Skip SystemMessage and ToolMessage
+        return messages
+
+    async def _handle_settings(self, payload: dict) -> dict:
+        """Handle settings get/update/reset operations."""
+        from lingya.mind.engine import TONE_PRESETS
+
+        action = payload.get("action", "get")
+        engine = self._engine
+
+        if action == "get":
+            c = engine.config
+            return {
+                "type": "settings_response",
+                "payload": {
+                    "ocean": {
+                        "openness": c.ocean.openness,
+                        "conscientiousness": c.ocean.conscientiousness,
+                        "extraversion": c.ocean.extraversion,
+                        "agreeableness": c.ocean.agreeableness,
+                        "neuroticism": c.ocean.neuroticism,
+                    },
+                    "tone": {
+                        "warmth": c.tone_matrix.warmth,
+                        "formality": c.tone_matrix.formality,
+                        "humor": c.tone_matrix.humor,
+                    },
+                    "identity": {
+                        "identity": c.identity.identity,
+                        "core_belief": c.identity.core_belief,
+                    },
+                    "available_presets": list(TONE_PRESETS.keys()),
+                },
+            }
+
+        if action == "update_ocean":
+            ocean = payload.get("ocean", {})
+            key_map = {
+                "O": "openness", "C": "conscientiousness",
+                "E": "extraversion", "A": "agreeableness", "N": "neuroticism",
+            }
+            mapped: dict[str, float] = {}
+            for k, v in ocean.items():
+                full_key = key_map.get(k, k)
+                val = float(v)
+                if not (0.0 <= val <= 1.0):
+                    return {
+                        "type": "error",
+                        "payload": {"message": f"{k}={val} 超出 0-1 范围"},
+                    }
+                mapped[full_key] = val
+            await engine.reload_config({"ocean": mapped})
+            full_names = ["openness", "conscientiousness", "extraversion",
+                          "agreeableness", "neuroticism"]
+            new_ocean = {k: getattr(engine.config.ocean, k) for k in full_names}
+            return {
+                "type": "settings_response",
+                "payload": {"ok": True, "ocean": new_ocean},
+            }
+
+        if action == "update_identity":
+            identity_data = payload.get("identity", {})
+            update: dict = {}
+            if "identity" in identity_data:
+                update["identity"] = identity_data["identity"]
+            if "core_belief" in identity_data:
+                update["core_belief"] = identity_data["core_belief"]
+            if update:
+                await engine.reload_config({"identity": update})
+            return {"type": "settings_response", "payload": {"ok": True}}
+
+        if action == "update_tone":
+            preset = payload.get("preset", "")
+            if preset not in TONE_PRESETS:
+                valid = list(TONE_PRESETS.keys())
+                return {
+                    "type": "error",
+                    "payload": {"message": f"Unknown preset: {preset}. Valid: {valid}"},
+                }
+            await engine.reload_config({"tone_preset": preset})
+            return {
+                "type": "settings_response",
+                "payload": {"ok": True, "tone_preset": preset},
+            }
+
+        if action == "reset":
+            await engine.reload_config({"reset": True})
+            c = engine.config
+            full_names = ["openness", "conscientiousness", "extraversion",
+                          "agreeableness", "neuroticism"]
+            return {
+                "type": "settings_response",
+                "payload": {
+                    "ok": True,
+                    "ocean": {k: getattr(c.ocean, k) for k in full_names},
+                },
+            }
+
+        return {
+            "type": "error",
+            "payload": {"message": f"Unknown settings action: {action}"},
         }
 
     async def _handle_mind(self, payload: dict) -> dict:

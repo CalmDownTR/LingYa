@@ -22,6 +22,55 @@ uv run ruff check lingya/        # Lint
 uv run mypy lingya/              # Type check
 ```
 
+## Commit 纪律
+
+**Commit 是交付单元，不是事后打包。** 不攒到最后一把梭，一次 commit 只完成一个逻辑完整的任务。
+
+### 粒度规则
+
+- 一个 commit **只做一个交付物**（或交付物中的一个完整子步骤）
+- 典型大小：**3-8 个文件**，改动 < 500 行
+- 跨交付物的基础设施（如新增 utility 函数、配置模板）→ **先 commit 基础设施，再做业务**
+- 绝对禁止：一个 commit 包含整个版本的所有改动
+
+### 什么时候 commit
+
+- 完成 roadmap 中一个交付物后 → 立刻 commit
+- 完成一个独立的子步骤后 → 立刻 commit
+- 修复一个 bug 后 → 立刻 commit
+- 写完一组测试并验证通过后 → 立刻 commit
+
+### 版本实现的 commit 节奏
+
+读 roadmap 版本条目时，如果**没有实现步骤子节**，先自己拆成 3-6 个步骤，然后：
+
+1. Step 1 完成 → commit → Step 2 完成 → commit → ...
+2. 绝不先做完所有步骤再回头 commit
+
+### commit message 格式
+
+```
+feat(<模块>): <简短英文描述>
+```
+
+示例：
+```
+feat(web): scaffold Vite + React + TypeScript project
+feat(web): add SSE streaming chat window
+feat(web): add settings panel with OCEAN sliders
+```
+
+- 用英文、首字母小写
+- 只描述做了什么，不描述 why（why 在产品文档里）
+- 不要 emoji
+- 不要 scope 外的改动——如果发现不相关的 bug，单独一个 commit 修
+
+### 禁止模式
+
+- ❌ 攒完整个版本再 `git add -A && git commit -m "v0.9.0"`
+- ❌ 一个 commit 同时改前端和后端不相关的模块
+- ❌ "顺手修了个 typo" 夹在功能 commit 里——单独 commit
+
 ## Architecture
 
 完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
@@ -72,12 +121,13 @@ MindEngine (pure computation, zero framework dependency)
 7. State checkpointed by LangGraph
 
 **Gateway mode** (HTTP + SSE, FastAPI):
-1. Client sends `POST /chat` with `{"text": "..."}` via HTTP
+1. Client sends `POST /chat` with `{"text": "..."}` via HTTP (or Web UI browser fetch)
 2. FastAPI endpoint → router._handle_chat_streaming() async generator
 3. Agent astream_events → SSE event frames pushed to client
 4. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
-4. Response `{"type": "chat_response", "payload": {"text": "...", "tone": {...}}}` sent back
-5. BackgroundRunner maintains independent life rhythm: PAD idle drift, diary scheduling, memory decay
+5. Response `{"type": "chat_response", "payload": {"text": "...", "tone": {...}}}` sent back
+6. BackgroundRunner maintains independent life rhythm: PAD idle drift, diary scheduling, memory decay
+7. StaticFiles mount serves `web/dist/` at `/` with SPA fallback (html=True)
 
 ### Modules at a glance
 
@@ -86,7 +136,8 @@ MindEngine (pure computation, zero framework dependency)
 | `main.py` | Assembly | Wires model + tools + middleware + MindEngine; 3 entry points: --daemon / start / default |
 | `lingya/cli.py` | Terminal UI | Rich-based, dual mode: direct (`run()`) + HTTP/SSE client |
 | `lingya/config.py` | Config | Pydantic + YAML + env overlay |
-| `lingya/gateway/` | Multi-entry | Daemon, FastAPI SSE server, message router, HTTP client, auth, BackgroundRunner |
+| `lingya/gateway/` | Multi-entry | Daemon, FastAPI SSE server, message router, HTTP client, auth, BackgroundRunner, Settings API |
+| `web/` | Web UI | Vite 6 + React 19 + TypeScript + Tailwind CSS 4, chat window + settings panel, SSE streaming |
 | `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection → idle_tick |
 | `lingya/memory/` | Memory | ChromaDB-backed, importance-weighted, three-level decay (retrieval_weight), recover |
 | `lingya/storage/` | Persistence | SQLite via aiosqlite, tables: conversations, turns, mind_state |
