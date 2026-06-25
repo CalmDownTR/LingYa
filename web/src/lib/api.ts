@@ -87,7 +87,7 @@ export function useNewSession() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sessions'] })
-      qc.invalidateQueries({ queryKey: ['session'] })
+      qc.invalidateQueries({ queryKey: ['session', 'current'] })
     },
   })
 }
@@ -102,7 +102,7 @@ export function useSwitchSession() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sessions'] })
-      qc.invalidateQueries({ queryKey: ['session'] })
+      qc.invalidateQueries({ queryKey: ['session', 'current'] })
     },
   })
 }

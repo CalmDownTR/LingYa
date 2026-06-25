@@ -107,15 +107,6 @@ describe('useNewSession', () => {
       payload: { action: 'new', thread_id: 'ws-new' },
     })
 
-    const wrapper = createWrapper()
-    const { result } = renderHook(() => useNewSession(), { wrapper })
-
-    // Set up mock queries that should be invalidated
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
-
-    // Need to test with a real QueryClient — use a separate render
-    // with a spied QueryClient
     const qc2 = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const spy = vi.spyOn(qc2, 'invalidateQueries')
 
@@ -130,10 +121,11 @@ describe('useNewSession', () => {
       expect(mockedApiFetch).toHaveBeenCalled()
     })
 
-    // After success, should invalidate both query keys
+    // After success, should invalidate sessions list and current session
+    // (NOT all ['session'] queries — history is scoped per thread)
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith({ queryKey: ['sessions'] })
-      expect(spy).toHaveBeenCalledWith({ queryKey: ['session'] })
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['session', 'current'] })
     })
   })
 })
