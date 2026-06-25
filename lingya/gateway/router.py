@@ -5,6 +5,7 @@ Does NOT know about WebSocket. Testable without network.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -16,6 +17,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 if TYPE_CHECKING:
     from lingya.protocols import IMemoryStore
+
+
+logger = logging.getLogger(__name__)
 
 
 class MessageRouter:
@@ -260,6 +264,11 @@ class MessageRouter:
                 {"configurable": {"thread_id": thread_id}}
             )
         except Exception:
+            # Log the error so silent failures are debuggable — returning []
+            # makes the frontend treat this as "empty session" otherwise.
+            logger.exception(
+                "Failed to load history for thread_id=%s", thread_id
+            )
             return []
 
         if state is None or not state.values:
