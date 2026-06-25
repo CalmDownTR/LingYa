@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Menu, Settings } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { Menu, Settings, AlertCircle, RotateCw } from 'lucide-react'
 import { useSSE } from '../../hooks/useSSE'
 import { useCurrentSession, useSessionHistory } from '../../lib/api'
 import { MessageBubble } from './MessageBubble'
@@ -9,20 +9,20 @@ import { SettingsPanel } from '../settings/SettingsPanel'
 import type { ChatMessage } from '../../types'
 
 export function ChatWindow() {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streamingContent, setStreamingContent] = useState('')
+  const [sentMessages, setSentMessages] = useState<ChatMessage[]>([])
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { startStream, isStreaming, abort } = useSSE()
-  const historyLoadedRef = useRef<string | null>(null)
 
   // Fetch current session on mount to discover initial thread_id
   const { data: currentData } = useCurrentSession()
 
-  // Fetch history whenever threadId changes
-  const { data: historyData } = useSessionHistory(currentThreadId)
+  // Fetch history whenever threadId changes (staleTime:0 → refetch on every switch)
+  const { data: historyData, isError: historyError, refetch: refetchHistory } =
+    useSessionHistory(currentThreadId)
 
   // On mount: set initial threadId from current session
   useEffect(() => {
@@ -32,21 +32,24 @@ export function ChatWindow() {
     }
   }, [currentData, currentThreadId])
 
-  // When history loads for a new threadId, populate messages
-  useEffect(() => {
+  // Derive history messages from query data — let refetch results flow through
+  // naturally. No ref guard; React Query's queryKey already scopes per thread.
+  const historyMessages = useMemo<ChatMessage[]>(() => {
     const msgs = historyData?.payload?.messages
-    if (msgs && currentThreadId && historyLoadedRef.current !== currentThreadId) {
-      const chatMessages: ChatMessage[] = msgs.map((msg, i) => ({
-        id: `hist-${currentThreadId.slice(-8)}-${i}`,
-        role: msg.role,
-        content: msg.content,
-        timestamp: Date.now() - (msgs.length - i) * 1000,
-      }))
-      setMessages(chatMessages)
-      setStreamingContent('')
-      historyLoadedRef.current = currentThreadId
-    }
+    if (!msgs || !currentThreadId) return []
+    return msgs.map((msg, i) => ({
+      id: `hist-${currentThreadId}-${i}`,
+      role: msg.role,
+      content: msg.content,
+      timestamp: Date.now() - (msgs.length - i) * 1000,
+    }))
   }, [historyData, currentThreadId])
+
+  // Combine history + newly sent messages in the current session
+  const messages = useMemo<ChatMessage[]>(
+    () => [...historyMessages, ...sentMessages],
+    [historyMessages, sentMessages],
+  )
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -59,9 +62,8 @@ export function ChatWindow() {
   const handleSessionChange = useCallback((threadId: string) => {
     abort()
     setCurrentThreadId(threadId)
-    setMessages([])
+    setSentMessages([])
     setStreamingContent('')
-    historyLoadedRef.current = null
   }, [abort])
 
   const handleSend = useCallback(
@@ -72,7 +74,7 @@ export function ChatWindow() {
         content: text,
         timestamp: Date.now(),
       }
-      setMessages((prev) => [...prev, userMsg])
+      setSentMessages((prev) => [...prev, userMsg])
       setStreamingContent('')
 
       let herContent = ''
@@ -89,7 +91,7 @@ export function ChatWindow() {
             content: response.payload.text || herContent,
             timestamp: Date.now(),
           }
-          setMessages((prev) => [...prev, herMsg])
+          setSentMessages((prev) => [...prev, herMsg])
           setStreamingContent('')
         },
         onError: (err) => {
@@ -101,7 +103,7 @@ export function ChatWindow() {
               content: herContent,
               timestamp: Date.now(),
             }
-            setMessages((prev) => [...prev, herMsg])
+            setSentMessages((prev) => [...prev, herMsg])
           }
           setStreamingContent('')
         },
@@ -142,7 +144,30 @@ export function ChatWindow() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-surface px-4 py-6">
         <div className="max-w-2xl mx-auto">
-          {messages.length === 0 && !streamingContent && (
+          {/* History load error — explicit feedback so users don't see blank */}
+          {historyError && (
+            <div className="flex flex-col items-center justify-center min-h-[200px] gap-3">
+              <AlertCircle size={28} className="text-error" />
+              <p
+                className="text-error text-[14px]"
+                style={{ fontVariationSettings: "'wght' 500" }}
+              >
+                聊天记录加载失败
+              </p>
+              <button
+                onClick={() => refetchHistory()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px]
+                           border border-hairline text-ink-secondary text-[13px]
+                           hover:bg-surface-input transition-colors"
+                style={{ fontVariationSettings: "'wght' 460" }}
+              >
+                <RotateCw size={14} />
+                重试
+              </button>
+            </div>
+          )}
+
+          {!historyError && messages.length === 0 && !streamingContent && (
             <div className="flex items-center justify-center h-full min-h-[200px]">
               <p
                 className="text-ink-muted text-[16px]"

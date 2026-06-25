@@ -201,7 +201,7 @@ describe('ChatWindow - sessions', () => {
   })
 
   // ── SSE abort on session switch ─────────────────────────────────
-  // BUG #1: Currently does NOT abort SSE stream when switching sessions
+  // BUG #1 (fixed): Aborts SSE stream when switching sessions
 
   it('aborts active SSE stream when switching sessions', async () => {
     vi.mocked(useCurrentSession).mockReturnValue({
