@@ -15,7 +15,7 @@ export function ChatWindow() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const { startStream, isStreaming } = useSSE()
+  const { startStream, isStreaming, abort } = useSSE()
   const historyLoadedRef = useRef<string | null>(null)
 
   // Fetch current session on mount to discover initial thread_id
@@ -57,11 +57,12 @@ export function ChatWindow() {
   }, [messages, streamingContent, scrollToBottom])
 
   const handleSessionChange = useCallback((threadId: string) => {
+    abort()
     setCurrentThreadId(threadId)
     setMessages([])
     setStreamingContent('')
     historyLoadedRef.current = null
-  }, [])
+  }, [abort])
 
   const handleSend = useCallback(
     async (text: string) => {

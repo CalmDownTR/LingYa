@@ -1,4 +1,5 @@
-import { X, Plus, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { X, Plus, Trash2, Loader2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useSessions, useNewSession, useSwitchSession, useDeleteSession } from '../../lib/api'
 import type { SessionInfo } from '../../types'
@@ -10,17 +11,19 @@ interface Props {
 }
 
 export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
-  const { data: sessionsData } = useSessions()
+  const { data: sessionsData, isLoading, isError } = useSessions()
   const newSession = useNewSession()
   const switchSession = useSwitchSession()
   const deleteSession = useDeleteSession()
   const qc = useQueryClient()
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const sessions = sessionsData?.payload?.sessions ?? []
 
   if (!open) return null
 
   const handleNew = () => {
+    setErrorMsg(null)
     newSession.mutate(undefined, {
       onSuccess: (data) => {
         if (data?.payload?.thread_id) {
@@ -28,10 +31,17 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
           onClose()
         }
       },
+      onError: (err) => {
+        setErrorMsg(err instanceof Error ? err.message : '创建会话失败')
+      },
     })
   }
 
   const handleSwitch = (threadId: string) => {
+    setErrorMsg(null)
+    // Snapshot current cache for rollback
+    const previousData = qc.getQueryData(['sessions'])
+
     // Optimistic update — mark clicked session as current immediately
     qc.setQueryData(['sessions'], (old: unknown) => {
       if (!old || typeof old !== 'object') return old
@@ -52,6 +62,13 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
       onSuccess: () => {
         onSessionChange?.(threadId)
         onClose()
+      },
+      onError: (err) => {
+        // Roll back optimistic update
+        if (previousData) {
+          qc.setQueryData(['sessions'], previousData)
+        }
+        setErrorMsg(err instanceof Error ? err.message : '切换会话失败')
       },
     })
   }
@@ -91,7 +108,36 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
 
         {/* Session list */}
         <div className="flex-1 overflow-y-auto py-1">
-          {sessions.map((s: SessionInfo) => (
+          {/* Error banner */}
+          {errorMsg && (
+            <div className="mx-3 mb-2 px-3 py-2 rounded-[6px] bg-error/10 text-error text-[12px]"
+                 style={{ fontVariationSettings: "'wght' 500" }}>
+              {errorMsg}
+            </div>
+          )}
+
+          {/* Loading state */}
+          {isLoading && (
+            <div className="flex items-center justify-center py-8 text-ink-muted">
+              <Loader2 size={16} className="animate-spin mr-2" />
+              <span className="text-[13px]" style={{ fontVariationSettings: "'wght' 460" }}>
+                加载中...
+              </span>
+            </div>
+          )}
+
+          {/* Error state */}
+          {isError && !isLoading && (
+            <div
+              className="text-error text-[13px] text-center py-8"
+              style={{ fontVariationSettings: "'wght' 460" }}
+            >
+              加载失败 — 请稍后重试
+            </div>
+          )}
+
+          {/* Session items */}
+          {!isLoading && !isError && sessions.map((s: SessionInfo) => (
             <div
               key={s.thread_id}
               onClick={() => {
@@ -132,7 +178,7 @@ export function SessionDrawer({ open, onClose, onSessionChange }: Props) {
               )}
             </div>
           ))}
-          {sessions.length === 0 && (
+          {!isLoading && !isError && sessions.length === 0 && (
             <div
               className="text-ink-muted text-[13px] text-center py-8"
               style={{ fontVariationSettings: "'wght' 460" }}
