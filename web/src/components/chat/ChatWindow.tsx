@@ -61,6 +61,9 @@ export function ChatWindow() {
 
   // Derive history messages from query data — let refetch results flow through
   // naturally. No ref guard; React Query's queryKey already scopes per thread.
+  // NOTE: the backend /session/history payload has no timestamp field, and the
+  // UI does not render timestamps, so we intentionally omit it here. Do not
+  // call Date.now() during render to fabricate one (react-hooks/purity).
   const historyMessages = useMemo<ChatMessage[]>(() => {
     const msgs = historyData?.payload?.messages
     if (!msgs || !currentThreadId) return []
@@ -68,7 +71,6 @@ export function ChatWindow() {
       id: `hist-${currentThreadId}-${i}`,
       role: msg.role,
       content: msg.content,
-      timestamp: Date.now() - (msgs.length - i) * 1000,
     }))
   }, [historyData, currentThreadId])
 
@@ -246,7 +248,6 @@ export function ChatWindow() {
                 id: 'streaming',
                 role: 'her',
                 content: streamingContent,
-                timestamp: Date.now(),
               }}
               isStreaming
             />

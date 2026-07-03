@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { X } from 'lucide-react'
 import { useSettings, useUpdateOcean, useUpdateIdentity, useUpdateTone, useResetSettings } from '../../lib/api'
 import { OCEANSliders } from './OCEANSliders'
@@ -26,11 +26,23 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [identity, setIdentity] = useState({ identity: '', core_belief: '' })
   const [tonePreset, setTonePreset] = useState('warm')
 
-  useEffect(() => {
+  // Sync server settings into local form state using the "adjust state
+  // during render" pattern (React docs: You Might Not Need an Effect).
+  //
+  // prevSettingsRef holds the last server payload we synced from. When the
+  // query returns a new object (refetch, mutation invalidation, etc.) we
+  // re-seed the local state. React Query keeps `data.payload` referentially
+  // stable across renders when the data hasn't changed, so this comparison
+  // is cheap and won't loop.
+  const [prevSettings, setPrevSettings] = useState<typeof settings>(undefined)
+  if (settings !== prevSettings) {
+    setPrevSettings(settings)
     if (settings) {
       setOcean(settings.ocean)
       setIdentity(settings.identity)
-      // Find matching preset from tone values
+      // Find matching preset from tone values.
+      // NOTE: this reverse-inference is fragile (warm/passionate overlap) —
+      // tracked as P1. Ideally the server returns the preset name directly.
       const t = settings.tone
       if (t.warmth >= 80 && t.formality <= 40) setTonePreset('warm')
       else if (t.warmth <= 25 && t.formality >= 75) setTonePreset('cool')
@@ -38,7 +50,7 @@ export function SettingsPanel({ open, onClose }: Props) {
       else if (t.warmth >= 70) setTonePreset('gentle')
       else setTonePreset('neutral')
     }
-  }, [settings])
+  }
 
   if (!open) return null
 

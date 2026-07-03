@@ -50,12 +50,18 @@ export interface SessionInfo {
   is_current: boolean
 }
 
-/** Chat message */
+/** Chat message.
+ *
+ * `timestamp` is optional because the backend `/session/history` payload
+ * does not include timestamps, and the UI currently does not render them.
+ * Callers that actually know the time (e.g. an event handler) may still
+ * populate it; render-phase code must not call Date.now() to fabricate one.
+ */
 export interface ChatMessage {
   id: string
   role: 'her' | 'user'
   content: string
-  timestamp: number
+  timestamp?: number
 }
 
 /** SSE event from the server */
