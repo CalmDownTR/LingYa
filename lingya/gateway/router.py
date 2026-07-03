@@ -219,12 +219,21 @@ class MessageRouter:
             return False
 
     async def _delete_thread(self, thread_id: str) -> None:
-        """Delete all checkpoints for a thread_id."""
-        await self._db.conn.execute(
-            "DELETE FROM checkpoints WHERE thread_id = ?",
-            (thread_id,),
-        )
-        await self._db.conn.commit()
+        """Delete all checkpoints for a thread_id.
+
+        Checkpoints are the sole source of truth for session data —
+        conversations/turns tables are legacy and no longer written to.
+        """
+        try:
+            await self._db.conn.execute(
+                "DELETE FROM checkpoints WHERE thread_id = ?",
+                (thread_id,),
+            )
+            await self._db.conn.commit()
+            logger.info("Session deleted: thread_id=%s", thread_id)
+        except Exception:
+            logger.exception("Failed to delete session: thread_id=%s", thread_id)
+            raise
 
     async def _list_sessions(self) -> list[dict]:
         """List all sessions ordered by most recent activity.
