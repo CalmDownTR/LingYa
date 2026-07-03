@@ -113,42 +113,6 @@ def read_diary(diary_dir: Path, index: int = 0) -> tuple[date, str] | None:
     return entry["date"], content
 
 
-def has_deep_conversation(turns: list[dict], min_turns: int = 5) -> bool:
-    """Check whether there are enough meaningful user messages.
-
-    Filters out command messages (starting with /).
-    """
-    meaningful = [
-        t for t in turns
-        if t["role"] == "user" and not t["content"].startswith("/")
-    ]
-    return len(meaningful) >= min_turns
-
-
-def format_transcript(turns: list[dict]) -> str:
-    """Format conversation turns into a readable transcript for diary prompts.
-
-    Groups turns by conversation and labels each with date.
-    """
-    lines: list[str] = []
-    current_conv = None
-
-    for t in turns:
-        conv_id = t.get("conv_id")
-        if conv_id != current_conv:
-            current_conv = conv_id
-            conv_date = t.get("created_at", "")[:10]
-            lines.append(f"\n--- {conv_date} 会话 ---")
-
-        role = "LingYa" if t["role"] == "ai" else "User"
-        content = t["content"]
-        if len(content) > 500:
-            content = content[:500] + "..."
-        lines.append(f"{role}: {content}")
-
-    return "\n".join(lines).strip()
-
-
 async def generate_diary(
     model: BaseChatModel,
     mind_config: MindConfig,

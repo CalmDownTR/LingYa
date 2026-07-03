@@ -102,54 +102,6 @@ class TestDiaryJudgement:
         save_diary(diary_dir, date.today(), "Today's diary.")
         assert should_generate_diary(diary_dir, period_days=1) is False
 
-    def test_has_deep_conversation_enough_turns(self):
-        from lingya.diary import has_deep_conversation
-
-        turns = [
-            {"role": "user", "content": "hello"},
-            {"role": "user", "content": "I'm feeling down"},
-            {"role": "user", "content": "just work stuff"},
-            {"role": "user", "content": "also this"},
-            {"role": "user", "content": "one more"},
-        ]
-        assert has_deep_conversation(turns, min_turns=5) is True
-
-    def test_has_deep_conversation_too_few_turns(self):
-        from lingya.diary import has_deep_conversation
-
-        turns = [
-            {"role": "user", "content": "hello"},
-            {"role": "ai", "content": "hi"},
-        ]
-        assert has_deep_conversation(turns, min_turns=5) is False
-
-    def test_has_deep_conversation_filters_commands(self):
-        from lingya.diary import has_deep_conversation
-
-        turns = [
-            {"role": "user", "content": "/memories"},
-            {"role": "ai", "content": "listing..."},
-            {"role": "user", "content": "/new"},
-            {"role": "ai", "content": "created"},
-            {"role": "user", "content": "/sessions"},
-        ]
-        assert has_deep_conversation(turns, min_turns=3) is False
-
-    def test_has_deep_conversation_mixed_commands_and_talk(self):
-        from lingya.diary import has_deep_conversation
-
-        turns = [
-            {"role": "user", "content": "/memories"},
-            {"role": "user", "content": "最近心情不太好"},
-            {"role": "ai", "content": "怎么了？"},
-            {"role": "user", "content": "工作压力大"},
-            {"role": "ai", "content": "跟我说说"},
-            {"role": "user", "content": "就是..."},
-        ]
-        # 4 non-command user messages (excluding /memories)
-        assert has_deep_conversation(turns, min_turns=3) is True
-
-
 class TestDiaryGeneration:
     @pytest.fixture
     def model(self):
@@ -162,21 +114,6 @@ class TestDiaryGeneration:
         m = MagicMock()
         m.ainvoke = AsyncMock(side_effect=RuntimeError("API error"))
         return m
-
-    def test_format_transcript_groups_by_conversation(self):
-        from lingya.diary import format_transcript
-
-        turns = [
-            {"role": "user", "content": "hello", "created_at": "2026-05-26", "conv_id": 1, "conv_title": "Session 1"},
-            {"role": "ai", "content": "hi", "created_at": "2026-05-26", "conv_id": 1, "conv_title": "Session 1"},
-            {"role": "user", "content": "bye", "created_at": "2026-05-27", "conv_id": 2, "conv_title": "Session 2"},
-            {"role": "ai", "content": "see you", "created_at": "2026-05-27", "conv_id": 2, "conv_title": "Session 2"},
-        ]
-        result = format_transcript(turns)
-        assert "2026-05-26" in result
-        assert "2026-05-27" in result
-        assert "User: hello" in result
-        assert "LingYa: hi" in result
 
     async def test_generate_diary_returns_content(self, model, mind_config):
         from lingya.diary import generate_diary

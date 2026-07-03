@@ -116,9 +116,9 @@ class GatewayDaemon:
         self._write_pid_file()
 
         # 4. Start background runner
-        if self._app.engine and self._app.db and self._app.model:
+        if self._app.engine and self._app.model:
             self._bg_runner = BackgroundRunner(
-                engine=self._app.engine, db=self._app.db,
+                engine=self._app.engine,
                 model=self._app.model, data_dir=self.config.data_dir,
                 memory=self._app.memory,
             )

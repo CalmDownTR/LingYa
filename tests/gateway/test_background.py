@@ -43,14 +43,6 @@ def mock_engine():
 
 
 @pytest.fixture
-def mock_db():
-    """Mock Database."""
-    db = MagicMock()
-    db.get_turns_since = AsyncMock(return_value=[])
-    return db
-
-
-@pytest.fixture
 def mock_model():
     """Mock ChatOpenAI model."""
     m = MagicMock()
@@ -69,12 +61,11 @@ def tmp_data_dir():
 
 
 class TestBackgroundRunnerInit:
-    def test_init_stores_config(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    def test_init_stores_config(self, mock_engine, mock_model, tmp_data_dir):
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             heartbeat_interval=30,
@@ -82,7 +73,6 @@ class TestBackgroundRunnerInit:
         )
 
         assert runner._engine is mock_engine
-        assert runner._db is mock_db
         assert runner._model is mock_model
         assert runner._data_dir == tmp_data_dir
         assert runner.heartbeat_interval == 30
@@ -91,12 +81,11 @@ class TestBackgroundRunnerInit:
         assert runner._heartbeat_task is None
         assert runner._diary_task is None
 
-    def test_init_default_intervals(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    def test_init_default_intervals(self, mock_engine, mock_model, tmp_data_dir):
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
         )
@@ -107,12 +96,11 @@ class TestBackgroundRunnerInit:
 
 class TestBackgroundRunnerStartStop:
     @pytest.mark.asyncio
-    async def test_start_creates_running_tasks(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    async def test_start_creates_running_tasks(self, mock_engine, mock_model, tmp_data_dir):
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             heartbeat_interval=0.01,
@@ -128,12 +116,11 @@ class TestBackgroundRunnerStartStop:
         assert runner.is_running is False
 
     @pytest.mark.asyncio
-    async def test_stop_cleans_up_tasks(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    async def test_stop_cleans_up_tasks(self, mock_engine, mock_model, tmp_data_dir):
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             heartbeat_interval=0.01,
@@ -150,12 +137,11 @@ class TestBackgroundRunnerStartStop:
         assert runner._diary_task is None
 
     @pytest.mark.asyncio
-    async def test_stop_when_not_running_is_noop(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    async def test_stop_when_not_running_is_noop(self, mock_engine, mock_model, tmp_data_dir):
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
         )
@@ -166,12 +152,11 @@ class TestBackgroundRunnerStartStop:
         assert runner.is_running is False
 
     @pytest.mark.asyncio
-    async def test_start_twice_does_not_duplicate(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    async def test_start_twice_does_not_duplicate(self, mock_engine, mock_model, tmp_data_dir):
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             heartbeat_interval=0.01,
@@ -190,13 +175,12 @@ class TestBackgroundRunnerStartStop:
 
 class TestHeartbeatLoop:
     @pytest.mark.asyncio
-    async def test_heartbeat_loop_calls_idle_tick(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    async def test_heartbeat_loop_calls_idle_tick(self, mock_engine, mock_model, tmp_data_dir):
         """Heartbeat loop calls idle_tick after each sleep interval."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             heartbeat_interval=0.01,
@@ -217,13 +201,12 @@ class TestHeartbeatLoop:
         mock_engine.idle_tick.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_heartbeat_loop_skips_when_not_running(self, mock_engine, mock_db, mock_model, tmp_data_dir):
+    async def test_heartbeat_loop_skips_when_not_running(self, mock_engine, mock_model, tmp_data_dir):
         """Heartbeat loop should not call idle_tick when _running is False."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             heartbeat_interval=0.01,
@@ -240,127 +223,21 @@ class TestHeartbeatLoop:
 
 class TestDiaryScheduler:
     @pytest.mark.asyncio
-    async def test_try_generate_diary_when_due(self, mock_engine, mock_db, mock_model, tmp_data_dir):
-        """_try_generate_diary generates diary when should_generate_diary returns True."""
-        from lingya.gateway.background import BackgroundRunner
-
-        meaningful_turns = [
-            {"role": "user", "content": "hello", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "hi there", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "how are you", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "good", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "nice day", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "yes", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "anything else", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "nope", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "bye", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-        ]
-        mock_db.get_turns_since = AsyncMock(return_value=meaningful_turns)
-
-        runner = BackgroundRunner(
-            engine=mock_engine,
-            db=mock_db,
-            model=mock_model,
-            data_dir=tmp_data_dir,
-        )
-
-        with patch("lingya.diary.should_generate_diary", return_value=True):
-            await runner._try_generate_diary()
-
-        # Diary should have been generated
-        diary_dir = Path(tmp_data_dir) / "diary"
-        md_files = list(diary_dir.glob("*.md"))
-        assert len(md_files) >= 1
-
-    @pytest.mark.asyncio
-    async def test_try_generate_diary_skips_when_not_due(self, mock_engine, mock_db, mock_model, tmp_data_dir):
-        """_try_generate_diary does nothing when should_generate_diary returns False."""
+    async def test_try_generate_diary_is_stub(self, mock_engine, mock_model, tmp_data_dir):
+        """_try_generate_diary is a stub — does not raise, does not call model."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
         )
 
-        with patch("lingya.diary.should_generate_diary", return_value=False):
-            await runner._try_generate_diary()
+        # Should not raise — stub just logs
+        await runner._try_generate_diary()
 
-        # No turns fetched
-        mock_db.get_turns_since.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_try_generate_diary_skips_when_no_deep_conversation(self, mock_engine, mock_db, mock_model, tmp_data_dir):
-        """_try_generate_diary skips when there aren't enough meaningful user turns."""
-        from lingya.gateway.background import BackgroundRunner
-
-        shallow_turns = [
-            {"role": "user", "content": "/memories", "created_at": "2026-05-30", "conv_id": 1},
-            {"role": "ai", "content": "listing...", "created_at": "2026-05-30", "conv_id": 1},
-        ]
-        mock_db.get_turns_since = AsyncMock(return_value=shallow_turns)
-
-        runner = BackgroundRunner(
-            engine=mock_engine,
-            db=mock_db,
-            model=mock_model,
-            data_dir=tmp_data_dir,
-        )
-
-        with patch("lingya.diary.should_generate_diary", return_value=True):
-            await runner._try_generate_diary()
-
-        # model.ainvoke should not have been called (no diary generation)
+        # Stub does not call model
         mock_model.ainvoke.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_try_generate_diary_handles_db_error_gracefully(self, mock_engine, mock_db, mock_model, tmp_data_dir):
-        """_try_generate_diary should not raise on DB error."""
-        from lingya.gateway.background import BackgroundRunner
-
-        mock_db.get_turns_since = AsyncMock(side_effect=RuntimeError("DB error"))
-
-        runner = BackgroundRunner(
-            engine=mock_engine,
-            db=mock_db,
-            model=mock_model,
-            data_dir=tmp_data_dir,
-        )
-
-        with patch("lingya.diary.should_generate_diary", return_value=True):
-            # Should not raise
-            await runner._try_generate_diary()
-
-    @pytest.mark.asyncio
-    async def test_try_generate_diary_handles_model_error_gracefully(self, mock_engine, mock_db, mock_model, tmp_data_dir):
-        """_try_generate_diary should not raise when LLM call fails."""
-        from lingya.gateway.background import BackgroundRunner
-
-        meaningful_turns = [
-            {"role": "user", "content": "hello", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "hi there", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "how are you", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "good", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "nice day", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "yes", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "anything else", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "ai", "content": "nope", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-            {"role": "user", "content": "bye", "created_at": "2026-05-30", "conv_id": 1, "conv_title": "Conv 1"},
-        ]
-        mock_db.get_turns_since = AsyncMock(return_value=meaningful_turns)
-        mock_model.ainvoke = AsyncMock(side_effect=RuntimeError("LLM API error"))
-
-        runner = BackgroundRunner(
-            engine=mock_engine,
-            db=mock_db,
-            model=mock_model,
-            data_dir=tmp_data_dir,
-        )
-
-        with patch("lingya.diary.should_generate_diary", return_value=True):
-            # Should not raise
-            await runner._try_generate_diary()
 
 
 # ── Memory Decay Loop tests ───────────────────────────────────────────
@@ -377,7 +254,7 @@ def mock_memory():
 class TestDecayLoop:
     @pytest.mark.asyncio
     async def test_decay_loop_calls_apply_decay(
-        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+        self, mock_engine, mock_model, tmp_data_dir, mock_memory
     ):
         """Decay loop calls apply_decay on the memory store."""
         from lingya.gateway.background import BackgroundRunner
@@ -386,7 +263,6 @@ class TestDecayLoop:
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             memory=mock_memory,
@@ -409,14 +285,13 @@ class TestDecayLoop:
 
     @pytest.mark.asyncio
     async def test_decay_loop_skips_when_no_memory(
-        self, mock_engine, mock_db, mock_model, tmp_data_dir
+        self, mock_engine, mock_model, tmp_data_dir
     ):
         """Decay loop is a no-op when memory is None (not started)."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             memory=None,
@@ -437,14 +312,13 @@ class TestDecayLoop:
 
     @pytest.mark.asyncio
     async def test_decay_loop_not_started_when_memory_none(
-        self, mock_engine, mock_db, mock_model, tmp_data_dir
+        self, mock_engine, mock_model, tmp_data_dir
     ):
         """When memory is None, _decay_task is never created on start."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             memory=None,
@@ -458,14 +332,13 @@ class TestDecayLoop:
 
     @pytest.mark.asyncio
     async def test_decay_interval_is_configurable(
-        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+        self, mock_engine, mock_model, tmp_data_dir, mock_memory
     ):
         """Decay interval can be configured via constructor."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             memory=mock_memory,
@@ -475,14 +348,13 @@ class TestDecayLoop:
 
     @pytest.mark.asyncio
     async def test_decay_loop_starts_when_memory_provided(
-        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+        self, mock_engine, mock_model, tmp_data_dir, mock_memory
     ):
         """When memory is provided, decay task is created on start."""
         from lingya.gateway.background import BackgroundRunner
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             memory=mock_memory,
@@ -497,7 +369,7 @@ class TestDecayLoop:
 
     @pytest.mark.asyncio
     async def test_decay_loop_handles_error_gracefully(
-        self, mock_engine, mock_db, mock_model, tmp_data_dir, mock_memory
+        self, mock_engine, mock_model, tmp_data_dir, mock_memory
     ):
         """Decay loop logs error and continues, does not crash."""
         from lingya.gateway.background import BackgroundRunner
@@ -513,7 +385,6 @@ class TestDecayLoop:
 
         runner = BackgroundRunner(
             engine=mock_engine,
-            db=mock_db,
             model=mock_model,
             data_dir=tmp_data_dir,
             memory=mock_memory,

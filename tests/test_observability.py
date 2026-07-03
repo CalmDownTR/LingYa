@@ -114,7 +114,6 @@ class TestBackgroundRunnerNoTracerParam:
         with pytest.raises(TypeError, match="tracer"):
             BackgroundRunner(
                 engine=MagicMock(),
-                db=MagicMock(),
                 model=MagicMock(),
                 data_dir="/tmp",
                 tracer="should-reject",

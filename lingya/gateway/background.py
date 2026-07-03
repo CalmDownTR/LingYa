@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from lingya.protocols import IMemoryStore
     from lingya.mind.engine import MindEngine
-    from lingya.storage.db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +31,6 @@ class BackgroundRunner:
     def __init__(
         self,
         engine: MindEngine,
-        db: Database,
         model: BaseChatModel,
         data_dir: str,
         memory: IMemoryStore | None = None,
@@ -42,7 +39,6 @@ class BackgroundRunner:
         decay_interval: int = 86400,
     ) -> None:
         self._engine = engine
-        self._db = db
         self._model = model
         self._data_dir = data_dir
         self._memory = memory
@@ -151,42 +147,11 @@ class BackgroundRunner:
                 )
 
     async def _try_generate_diary(self) -> None:
-        """Check diary eligibility and generate if due.
+        """Stub: diary generation not yet wired to a transcript source.
 
-        Extracted for testability — can be called directly with mocked dependencies.
+        TODO: read conversation history from LangGraph checkpoint and
+        pass it to generate_diary().
         """
-        from lingya.diary import (
-            format_transcript,
-            generate_diary,
-            get_diary_dir,
-            get_last_diary_date,
-            has_deep_conversation,
-            save_diary,
-            should_generate_diary,
+        logger.debug(
+            "Diary generation not yet implemented — no transcript source wired"
         )
-
-        try:
-            diary_dir = get_diary_dir(self._data_dir)
-            if not should_generate_diary(diary_dir, period_days=1):
-                return
-
-            # Get turns since last diary (or all recent if no diary yet)
-            last_date = get_last_diary_date(diary_dir)
-            since = last_date.isoformat() if last_date else "1970-01-01"
-            turns = await self._db.get_turns_since(since)
-
-            if not has_deep_conversation(turns):
-                logger.debug("Diary due but no deep conversation — skipping")
-                return
-
-            transcript = format_transcript(turns)
-
-            # Build a MindConfig from the engine's current config
-            mind_config = self._engine.config
-
-            content = await generate_diary(self._model, mind_config, transcript)
-            path = save_diary(diary_dir, date.today(), content)
-            logger.info("Diary generated: %s", path)
-
-        except Exception:
-            logger.exception("Diary scheduler error — will retry on next tick")
