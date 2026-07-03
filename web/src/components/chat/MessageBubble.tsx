@@ -9,22 +9,28 @@ interface Props {
 export function MessageBubble({ message, isStreaming }: Props) {
   const isHer = message.role === 'her'
 
+  // Don't render empty/non-string bubbles as tiny colored pills.
+  // The API can return content as null/non-string, so guard with typeof.
+  const content =
+    typeof message.content === 'string' ? message.content.trim() : ''
+  if (!content && !isStreaming) return null
+
   return (
     <div
       className={`flex ${isHer ? 'justify-start' : 'justify-end'} mb-2`}
     >
       <div
-        className={`max-w-[70%] rounded-[9999px] px-4 py-2.5 text-[16px] leading-relaxed ${
+        className={`max-w-[80%] rounded-[min(18px,50%)] px-5 py-4 text-[16px] leading-relaxed ${
           isHer
-            ? 'bg-bubble-her text-ink-on-accent'
-            : 'bg-bubble-user text-ink'
+            ? 'bg-bubble-her text-ink-on-accent rounded-bl-[4px]'
+            : 'bg-bubble-user text-ink rounded-br-[4px]'
         }`}
         style={{ fontVariationSettings: "'wght' 460" }}
       >
         <div className="prose prose-sm prose-invert max-w-none">
           <ReactMarkdown
             components={{
-              p: ({ children }) => <p className="m-0">{children}</p>,
+              p: ({ children }) => <p className="m-0 mb-2.5 last:mb-0">{children}</p>,
               code: ({ children }) => (
                 <code className="text-[13px] bg-white/10 rounded px-1 py-0.5">
                   {children}
@@ -37,7 +43,7 @@ export function MessageBubble({ message, isStreaming }: Props) {
               ),
             }}
           >
-            {message.content || (isStreaming ? '...' : '')}
+            {content || (isStreaming ? '...' : '')}
           </ReactMarkdown>
         </div>
         {isStreaming && isHer && (

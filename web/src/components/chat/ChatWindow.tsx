@@ -68,9 +68,14 @@ export function ChatWindow() {
     }))
   }, [historyData, currentThreadId])
 
-  // Combine history + newly sent messages in the current session
+  // Combine history + newly sent messages in the current session.
+  // Filter out empty/non-string messages so they don't render as tiny colored pills.
+  // The API can return content as null/non-string, so guard with typeof.
   const messages = useMemo<ChatMessage[]>(
-    () => [...historyMessages, ...sentMessages],
+    () =>
+      [...historyMessages, ...sentMessages].filter(
+        (msg) => typeof msg.content === 'string' && msg.content.trim().length > 0,
+      ),
     [historyMessages, sentMessages],
   )
 
