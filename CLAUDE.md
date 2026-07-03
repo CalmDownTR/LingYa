@@ -73,7 +73,7 @@ feat(web): add settings panel with OCEAN sliders
 
 ## Architecture
 
-完整架构详细记录在 [.claude/specs/architecture.md](.claude/specs/architecture.md)，包含文件树、依赖图、已知 gap。**改动涉及架构变化时，必须同步更新 spec 和本节。**
+完整架构详细记录在 [`product/reference/architecture.md`](product/reference/architecture.md)，包含模块拓扑、数据流、关键接口、技术栈、ADR 引用、已知缺口。**改动涉及架构变化时，必须同步更新该文档和本节。**
 
 LingYa 基于 **deepagents** (`create_deep_agent`) 构建，支持两种运行模式：
 
@@ -140,7 +140,7 @@ MindEngine (pure computation, zero framework dependency)
 | `web/` | Web UI | Vite 6 + React 19 + TypeScript + Tailwind CSS 4, chat window + settings panel, SSE streaming |
 | `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection → idle_tick |
 | `lingya/memory/` | Memory | ChromaDB-backed, importance-weighted, three-level decay (retrieval_weight), recover |
-| `lingya/storage/` | Persistence | SQLite via aiosqlite, tables: conversations, turns, mind_state |
+| `lingya/storage/` | Persistence | SQLite via aiosqlite, mind_state table (+ raw conn for LangGraph checkpoints) |
 | `lingya/diary.py` | Diary | Markdown diary generation in LingYa's voice, one per day |
 | `lingya/reflection.py` | Opening | Generates context-aware opening line for returning users |
 
@@ -161,6 +161,6 @@ MindEngine (pure computation, zero framework dependency)
 | 角色 | 决定做什么、方案行不行 | 想清楚怎么做、主动暴露歧义 |
 | 简单任务 | 一句话指令 | 直接改，改完一句话告知 |
 | 非平凡任务 | 确认或调整方案方向 | 先说明改哪些文件、为什么这样改、有什么取舍需要拍板，得到确认后再动手 |
-| 架构变化 | — | 改完后同步更新 CLAUDE.md + `.claude/specs/architecture.md` |
+| 架构变化 | — | 改完后同步更新 CLAUDE.md + `product/reference/architecture.md` |
 
 核心：**动手前你说了算，动手后让你知道。**
