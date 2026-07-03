@@ -297,7 +297,15 @@ class MessageRouter:
             return None
 
     async def _load_history(self, thread_id: str) -> list[dict]:
-        """Load conversation history for a thread_id from LangGraph checkpointer."""
+        """Load conversation history for a thread_id from LangGraph checkpointer.
+
+        In recent LangChain versions, ``AIMessage.content`` may be a list of
+        content blocks (e.g. ``[{"type": "text", "text": "..."}]``)
+        rather than a plain string — especially when the message was produced
+        via ``astream_events(version="v3")``.  This helper normalises both
+        shapes to a plain string so the frontend always receives
+        ``{"role": "her", "content": "..."}`` with *content* being a string.
+        """
         if self._agent is None:
             return []
         try:
@@ -327,10 +335,33 @@ class MessageRouter:
             elif type_name == "AIMessage":
                 messages.append({
                     "role": "her",
-                    "content": getattr(msg, "content", ""),
+                    "content": self._extract_text_content(msg),
                 })
             # Skip SystemMessage and ToolMessage
         return messages
+
+    @staticmethod
+    def _extract_text_content(msg) -> str:
+        """Normalise *msg.content* to a plain string.
+
+        Handles:
+        - ``str`` → returned as-is.
+        - ``list[dict]`` (LangChain ContentBlock format) → extracts all
+          ``"text"`` fields and joins them.
+        - Anything else → coerced via ``str()``.
+        """
+        raw = getattr(msg, "content", "")
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, list):
+            parts: list[str] = []
+            for block in raw:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts) if parts else ""
+        return str(raw)
 
     async def _handle_settings(self, payload: dict) -> dict:
         """Handle settings get/update/reset operations."""

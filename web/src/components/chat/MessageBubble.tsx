@@ -6,13 +6,38 @@ interface Props {
   isStreaming?: boolean
 }
 
+/** Normalise message.content to a plain string.
+ *
+ * The backend *should* always return a string, but LangChain's AIMessage
+ * content can be a ContentBlock list ``[{"type":"text","text":"..."}]``
+ * in some versions.  This helper extracts text from that shape as a
+ * defence-in-depth measure.
+ */
+function normaliseContent(raw: unknown): string {
+  if (typeof raw === 'string') return raw.trim()
+  if (Array.isArray(raw)) {
+    const parts: string[] = []
+    for (const block of raw) {
+      if (
+        block !== null &&
+        typeof block === 'object' &&
+        (block as Record<string, unknown>).type === 'text' &&
+        typeof (block as Record<string, unknown>).text === 'string'
+      ) {
+        parts.push((block as Record<string, unknown>).text as string)
+      }
+    }
+    return parts.join('\n')
+  }
+  return ''
+}
+
 export function MessageBubble({ message, isStreaming }: Props) {
   const isHer = message.role === 'her'
 
   // Don't render empty/non-string bubbles as tiny colored pills.
-  // The API can return content as null/non-string, so guard with typeof.
-  const content =
-    typeof message.content === 'string' ? message.content.trim() : ''
+  // Handles both plain strings and LangChain ContentBlock lists.
+  const content = normaliseContent(message.content)
   if (!content && !isStreaming) return null
 
   return (
