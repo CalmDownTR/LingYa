@@ -606,13 +606,25 @@ class MessageRouter:
         The caller decides how to deliver these — emit callback (backward compat),
         SSE frames (FastAPI), or any other transport.
         """
+        from lingya.transformers import create_lingya_transformer
+
         accumulated_text = ""
+
+        # Filter out _subagent_factory from compiled stream_transformers
+        # to avoid SubagentTransformer key conflict in the v3 StreamMux.
+        # LingYa does not use subagents. See ADR-004 Amendment 2.
+        _saved_st = self._agent.stream_transformers
+        self._agent.stream_transformers = tuple(
+            t for t in _saved_st
+            if not (callable(t) and getattr(t, "__name__", "") == "_subagent_factory")
+        )
 
         try:
             run = await self._agent.astream_events(
                 {"messages": messages},
                 config,
                 version="v3",
+                transformers=[create_lingya_transformer],
             )
 
             # Start MindEngine processing concurrently — runs while LLM streams.
@@ -703,7 +715,10 @@ class MessageRouter:
             }
 
         except Exception as e:
+            logger.exception("_handle_chat_streaming failed")
             yield {"type": "error", "payload": {"message": str(e)}}
+        finally:
+            self._agent.stream_transformers = _saved_st
 
     async def _handle_chat_invoke(
         self,

@@ -9,12 +9,13 @@ abstraction layer.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Iterator, Sequence
+from typing import Any, Callable
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.tools import BaseTool
 from pydantic import Field
 
 
@@ -88,7 +89,7 @@ class LiteLLMModel(BaseChatModel):
         stop: list[str] | None = None,
         run_manager: Any = None,
         **kwargs: Any,
-    ) -> Iterator[ChatGeneration]:
+    ) -> Iterator[ChatGenerationChunk]:
         """Stream chunks via litellm.completion with stream=True."""
         import litellm
 
@@ -106,7 +107,27 @@ class LiteLLMModel(BaseChatModel):
             delta = chunk.choices[0].delta
             content = delta.content or ""
             if content:
-                yield ChatGeneration(message=AIMessage(content=content))
+                yield ChatGenerationChunk(message=AIMessageChunk(content=content))
+
+    def bind_tools(
+        self,
+        tools: Sequence[dict[str, Any] | type | Callable[..., Any] | BaseTool],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> LiteLLMModel:
+        """Bind tools to the model, returning a new instance with tools stored.
+
+        LiteLLM handles tool calling transparently — we just need to pass
+        tools through to litellm.completion. This override stores the tools
+        on the model instance so `_generate` / `_stream` can forward them.
+        """
+        import copy
+
+        bound = copy.copy(self)
+        object.__setattr__(bound, "_bound_tools", list(tools))
+        object.__setattr__(bound, "_bound_tools_kwargs", kwargs)
+        return bound
 
     @property
     def _llm_type(self) -> str:
