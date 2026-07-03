@@ -83,7 +83,7 @@ class TestDaemonLifecycle:
         )
 
         with patch(
-            "lingya.app.ChatOpenAI", return_value=mock_model
+            "lingya.app.LiteLLMModel", return_value=mock_model
         ), \
              patch(
             "lingya.app.create_deep_agent", return_value=MagicMock()
@@ -177,7 +177,7 @@ class TestDaemonLifecycle:
         )
 
         with patch(
-            "lingya.app.ChatOpenAI", return_value=mock_model
+            "lingya.app.LiteLLMModel", return_value=mock_model
         ), \
              patch(
             "lingya.app.create_deep_agent", return_value=MagicMock()
@@ -314,7 +314,7 @@ class TestSessionLifecycle:
         )
 
         with patch(
-            "lingya.app.ChatOpenAI", return_value=mock_model
+            "lingya.app.LiteLLMModel", return_value=mock_model
         ), \
              patch(
             "lingya.app.create_deep_agent", return_value=mock_agent

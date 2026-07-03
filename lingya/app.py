@@ -6,14 +6,12 @@ Used by both Gateway mode (daemon) and Direct mode (CLI).
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any, Self
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from pydantic import SecretStr
 
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
@@ -21,6 +19,7 @@ from deepagents.middleware.summarization import create_summarization_tool_middle
 
 from lingya.config import Config
 from lingya.events import EventBus
+from lingya.llm import LiteLLMModel
 from lingya.memory import EnhancedMemoryStore
 from lingya.mind import MindEngine, build_static_prompt
 from lingya.mind.config import MindConfig
@@ -35,7 +34,7 @@ class Application:
     config: Config
     mind_config: MindConfig
     db: Database | None
-    model: ChatOpenAI | None
+    model: BaseChatModel | None
     memory: EnhancedMemoryStore | None
     engine: MindEngine | None
     static_prompt: str
@@ -73,7 +72,7 @@ class ApplicationBuilder:
         self._config = config
         self._mind_config = mind_config
         self._db: Database | None = None
-        self._model: ChatOpenAI | None = None
+        self._model: BaseChatModel | None = None
         self._memory: EnhancedMemoryStore | None = None
         self._engine: MindEngine | None = None
         self._static_prompt: str = ""
@@ -90,12 +89,10 @@ class ApplicationBuilder:
         return self
 
     def with_model(self) -> Self:
-        api_key = os.environ[self._config.llm.api_key_env]
-        self._model = ChatOpenAI(
+        self._model = LiteLLMModel(
             model=self._config.llm.model,
-            api_key=SecretStr(api_key),
-            base_url=self._config.llm.api_base_url,
             temperature=self._config.llm.temperature,
+            max_tokens=self._config.llm.max_tokens,
         )
         self._model.profile = {"max_input_tokens": self._config.llm.max_input_tokens}
         return self

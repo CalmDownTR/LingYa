@@ -10,15 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from lingya.llm import LiteLLMModel
 
 load_dotenv()
 
@@ -45,15 +43,8 @@ async def run_conversation(config_path: str, script_path: str) -> dict[str, Any]
     config = load_mind_config(config_path)
     app_config = load_app_config()
 
-    api_key = os.environ.get(app_config.llm.api_key_env)
-    if not api_key:
-        print(f"Error: env var {app_config.llm.api_key_env} not set", file=sys.stderr)
-        sys.exit(1)
-
-    model = ChatOpenAI(
+    model = LiteLLMModel(
         model=app_config.llm.model,
-        api_key=SecretStr(api_key),
-        base_url=app_config.llm.api_base_url,
         temperature=0.7,
         max_tokens=app_config.llm.max_tokens,
     )

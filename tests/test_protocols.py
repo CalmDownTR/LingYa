@@ -98,22 +98,19 @@ class TestIMemoryStore:
 
 
 class TestILLMBackend:
-    def test_chatopenai_passes_isinstance(self):
-        """ChatOpenAI with ainvoke should pass isinstance check."""
+    def test_litellm_passes_isinstance(self):
+        """LiteLLMModel with ainvoke should pass isinstance check."""
         import os
 
-        from langchain_openai import ChatOpenAI
-        from pydantic import SecretStr
-
+        from lingya.llm import LiteLLMModel
         from lingya.protocols import ILLMBackend
 
         if "DEEPSEEK_API_KEY" not in os.environ:
             pytest.skip("DEEPSEEK_API_KEY not set")
 
-        model = ChatOpenAI(
-            model="deepseek-v4-flash",
-            api_key=SecretStr(os.environ["DEEPSEEK_API_KEY"]),
-            base_url="https://api.deepseek.com",
+        model = LiteLLMModel(
+            model="deepseek/deepseek-v4-flash",
+            temperature=0.7,
         )
         assert isinstance(model, ILLMBackend)
 

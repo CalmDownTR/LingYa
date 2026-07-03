@@ -21,14 +21,13 @@ from pathlib import Path
 from statistics import mean
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from langchain_core.language_models import BaseChatModel
 
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lingya.config import load_config as load_app_config  # noqa: E402
+from lingya.llm import LiteLLMModel  # noqa: E402
 
 # ── Judge prompt templates ─────────────────────────────────────────────
 
@@ -187,18 +186,11 @@ GLOBAL_PAIRWISE_PROMPT = """\
 然后输出JSON：{{"low_a_is": "<A或B>", "confidence": <0-100置信度>, "analysis": "<三句话总结核心差异>"}}"""
 
 
-def build_judge_model(temperature: float = 0.0, model: str = "deepseek-v4-pro") -> ChatOpenAI:
-    app_config = load_app_config()
-    api_key = os.environ.get(app_config.llm.api_key_env)
-    if not api_key:
-        print(f"Error: env var {app_config.llm.api_key_env} not set", file=sys.stderr)
-        sys.exit(1)
-    return ChatOpenAI(
+def build_judge_model(temperature: float = 0.0, model: str = "deepseek/deepseek-v4-pro") -> LiteLLMModel:
+    return LiteLLMModel(
         model=model,
-        api_key=SecretStr(api_key),
-        base_url=app_config.llm.api_base_url,
         temperature=temperature,
-        max_tokens=1024,  # Max output tokens (not context window). Sufficient for judge CoT + JSON
+        max_tokens=1024,
     )
 
 
@@ -223,7 +215,7 @@ def parse_score(response_text: str) -> tuple[float, str]:
         return 3.0, text[:200]
 
 
-async def judge_one(model: ChatOpenAI, prompt: str) -> str:
+async def judge_one(model: BaseChatModel, prompt: str) -> str:
     """Single judge call. Returns raw response text."""
     from langchain_core.messages import HumanMessage
 
@@ -231,7 +223,7 @@ async def judge_one(model: ChatOpenAI, prompt: str) -> str:
     return result.content if hasattr(result, "content") else str(result)
 
 
-async def judge_one_score(model: ChatOpenAI, prompt: str) -> tuple[float, str]:
+async def judge_one_score(model: BaseChatModel, prompt: str) -> tuple[float, str]:
     """Single judge call returning (score, reason)."""
     text = await judge_one(model, prompt)
     return parse_score(text)
@@ -239,7 +231,7 @@ async def judge_one_score(model: ChatOpenAI, prompt: str) -> tuple[float, str]:
 
 # ── Absolute scoring (original) ────────────────────────────────────────
 
-async def judge_turns(data: dict, model: ChatOpenAI) -> dict:
+async def judge_turns(data: dict, model: BaseChatModel) -> dict:
     """Evaluate warmth, formality, humor, dominance per turn."""
     prompts = {
         "warmth": WARMTH_PROMPT,
@@ -273,7 +265,7 @@ async def judge_turns(data: dict, model: ChatOpenAI) -> dict:
     return {"averages": averages, "details": details}
 
 
-async def judge_differentiation(data_low: dict, data_high: dict, model: ChatOpenAI) -> dict:
+async def judge_differentiation(data_low: dict, data_high: dict, model: BaseChatModel) -> dict:
     """Judge if two conversations feel like different personalities."""
     def format_ts(data: dict) -> str:
         lines = []
@@ -378,7 +370,7 @@ def parse_pairwise(response_text: str) -> dict:
 async def pairwise_judge_turns(
     data_low: dict,
     data_high: dict,
-    model: ChatOpenAI,
+    model: BaseChatModel,
     shuffle_seed: int = 42,
 ) -> dict:
     """Per-turn pairwise A/B blind test.
@@ -445,7 +437,7 @@ async def pairwise_judge_turns(
 async def pairwise_judge_global(
     data_low: dict,
     data_high: dict,
-    model: ChatOpenAI,
+    model: BaseChatModel,
 ) -> dict:
     """Global pairwise: present full 10-turn transcripts as A vs B, identify Low A."""
     rng = random.Random(99)

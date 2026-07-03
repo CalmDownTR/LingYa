@@ -15,14 +15,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from langchain_core.language_models import BaseChatModel
 
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lingya.config import load_config as load_app_config  # noqa: E402
+from lingya.llm import LiteLLMModel  # noqa: E402
 from lingya.mind import build_static_prompt, load_mind_config  # noqa: E402
 
 
@@ -59,7 +59,7 @@ def build_messages(system_prompt: str, case_messages: list[dict]) -> list:
     return messages
 
 
-def run_eval(model: ChatOpenAI, persona_config_path: str, cases_path: str) -> bool:
+def run_eval(model: BaseChatModel, persona_config_path: str, cases_path: str) -> bool:
     persona = load_mind_config(persona_config_path)
     system_prompt = build_static_prompt(persona)
 
@@ -107,10 +107,8 @@ def main() -> None:
     persona_path = app_config.persona_config_path
     cases_path = os.environ.get("EVAL_CASES_PATH", "tests/cases.json")
 
-    model = ChatOpenAI(
+    model = LiteLLMModel(
         model=app_config.llm.model,
-        api_key=SecretStr(os.environ[app_config.llm.api_key_env]),
-        base_url=app_config.llm.api_base_url,
         temperature=0.0,  # deterministic for eval
     )
 

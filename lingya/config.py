@@ -8,10 +8,7 @@ from pydantic import BaseModel
 
 
 class LLMConfig(BaseModel):
-    provider: str = "deepseek"
-    model: str = "deepseek-v4-flash"
-    api_key_env: str = "DEEPSEEK_API_KEY"
-    api_base_url: str = "https://api.deepseek.com"
+    model: str = "deepseek/deepseek-v4-flash"
     temperature: float = 0.7
     max_tokens: int = 32768
     max_input_tokens: int = 1_048_576  # DeepSeek V4 Flash 1M context window, for summarization thresholds
@@ -44,9 +41,7 @@ def load_config(path: str | None = None) -> Config:
 
     # Overlay env vars
     env_map = {
-        "llm_provider": ("llm", "provider"),
         "llm_model": ("llm", "model"),
-        "llm_api_base_url": ("llm", "api_base_url"),
         "llm_max_tokens": ("llm", "max_tokens"),
         "db_path": ("db_path",),
         "data_dir": ("data_dir",),
@@ -62,11 +57,5 @@ def load_config(path: str | None = None) -> Config:
                 d[cfg_path[-1]] = int(val)
             else:
                 d[cfg_path[-1]] = val
-
-    # Handle api_key_env
-    if os.environ.get("LINGYA_API_KEY"):
-        data.setdefault("llm", {})["api_key_env"] = "LINGYA_API_KEY"
-    elif os.environ.get("DEEPSEEK_API_KEY"):
-        data.setdefault("llm", {})["api_key_env"] = "DEEPSEEK_API_KEY"
 
     return Config.model_validate(data)
