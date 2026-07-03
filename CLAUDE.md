@@ -1,166 +1,109 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code in this repository.
+完整架构详见 @product/reference/architecture.md。Git 纪律见 @.claude/git-disciplines.md。
 
 ## 核心原则
-
-- **KISS (Keep It Simple, Stupid)**: 优先选择最简单的方案。能用现有模块解决的，不引入新模块；能用标准库的，不加依赖；能用一个函数写完的，不拆成三个。简单即正确。
-- **YAGNI (You Aren't Gonna Need It)**: 不为假设的需求写代码。不要预设计未来的扩展点、不要提前抽象、不要给还没出现的配置项留坑。需求到了再改，那时候你更清楚该怎么做。
-- **先想后写**: 有歧义或不确定时，先说出来，不要默默选一个方案。方案过度设计时，主动指出更简单的替代方案。不理解的地方停下来问，别猜。
-- **精准修改**: 只改和当前任务直接相关的代码。不顺手重构、不改格式、不删无关代码。每个改动的行都应该能追溯到用户的需求。自己的改动产生的 orphan（引入的 import、变量等）要清理。
-- **测试驱动**: 先写测试，再写实现。测试即规格——它定义了"什么叫做完"，也是你自检的唯一标准：红灯（写测试）→ 绿灯（写实现）→ 重构。不是"看上去应该可以了"，而是"测试过了"。
+- **KISS & YAGNI**: 优先最简单的方案。不为假设需求写代码，不提前抽象。简单即正确。
+- **先想后写**: 有歧义或过度设计时停下来主动指出，不理解的地方直接问，别猜。
+- **精准修改**: 只改和当前任务直接相关的代码。及时清理自己改动产生的孤立变量/Import。
+- **测试驱动 (TDD)**: 先写测试，再写实现。红灯（写测试）→ 绿灯（写实现）→ 重构。
 
 ## Commands
-
 ```bash
-uv sync                          # Install all dependencies
+uv sync                          # Install dependencies
 uv add <package>                 # Add a runtime dependency
-uv add --dev <package>           # Add a dev dependency
-uv run python main.py            # Run the app
-uv run pytest -s                 # Run tests
-uv run ruff check lingya/        # Lint
+uv run python main.py            # Run direct mode
+uv run python main.py start      # Run gateway daemon
+uv run pytest -s                 # Run test suite
+uv run ruff check lingya/        # Lint code
 uv run mypy lingya/              # Type check
 ```
 
-## Commit 纪律
-
-**Commit 是交付单元，不是事后打包。** 不攒到最后一把梭，一次 commit 只完成一个逻辑完整的任务。
-
-### 粒度规则
-
-- 一个 commit **只做一个交付物**（或交付物中的一个完整子步骤）
-- 典型大小：**3-8 个文件**，改动 < 500 行
-- 跨交付物的基础设施（如新增 utility 函数、配置模板）→ **先 commit 基础设施，再做业务**
-- 绝对禁止：一个 commit 包含整个版本的所有改动
-
-### 什么时候 commit
-
-- 完成 roadmap 中一个交付物后 → 立刻 commit
-- 完成一个独立的子步骤后 → 立刻 commit
-- 修复一个 bug 后 → 立刻 commit
-- 写完一组测试并验证通过后 → 立刻 commit
-
-### 版本实现的 commit 节奏
-
-读 roadmap 版本条目时，如果**没有实现步骤子节**，先自己拆成 3-6 个步骤，然后：
-
-1. Step 1 完成 → commit → Step 2 完成 → commit → ...
-2. 绝不先做完所有步骤再回头 commit
-
-### commit message 格式
-
-```
-feat(<模块>): <简短英文描述>
-```
-
-示例：
-```
-feat(web): scaffold Vite + React + TypeScript project
-feat(web): add SSE streaming chat window
-feat(web): add settings panel with OCEAN sliders
-```
-
-- 用英文、首字母小写
-- 只描述做了什么，不描述 why（why 在产品文档里）
-- 不要 emoji
-- 不要 scope 外的改动——如果发现不相关的 bug，单独一个 commit 修
-
-### 禁止模式
-
-- ❌ 攒完整个版本再 `git add -A && git commit -m "v0.9.0"`
-- ❌ 一个 commit 同时改前端和后端不相关的模块
-- ❌ "顺手修了个 typo" 夹在功能 commit 里——单独 commit
-
 ## Architecture
 
-完整架构详细记录在 [`product/reference/architecture.md`](product/reference/architecture.md)，包含模块拓扑、数据流、关键接口、技术栈、ADR 引用、已知缺口。**改动涉及架构变化时，必须同步更新该文档和本节。**
-
-LingYa 基于 **deepagents** (`create_deep_agent`) 构建，支持两种运行模式：
-
-**Direct mode** (`python main.py`): CLI 进程内直连 agent
-**Gateway mode** (`python main.py start`): 常驻 daemon + HTTP/SSE 多客户端
-
-```
-main.py
-  ├── [--daemon] → GatewayDaemon (常驻进程)
-  │     ├── MindEngine (单例, 有状态连续演化)
-  │     ├── create_deep_agent() (agent 实例)
-  │     │     ├── model: ChatOpenAI (DeepSeek API)
-  │     │     ├── tools: [memory_store, memory_search]
-  │     │     ├── middleware: [SummarizationToolMiddleware]
-  │     │     ├── system_prompt: build_static_prompt()
-  │     │     ├── backend: StateBackend
-  │     │     └── checkpointer: AsyncSqliteSaver
-  │     ├── FastAPI Server (HTTP + SSE, uvicorn)
-  │     ├── MessageRouter (mind/diary/memory/chat 路由)
-  │     └── BackgroundRunner (PAD idle drift + diary scheduler + memory decay)
-  │
-  ├── [start] → 自动拉起 daemon + HTTP CLI 客户端
-  │
-  └── [default] → LingYaCLI (进程内直连 agent + MindEngine)
-
-MindEngine (pure computation, zero framework dependency)
-  ├── OCC 22-emotion classification (deterministic)
-  ├── PAD evolution (pleasure-arousal-dominance)
-  ├── IPC state machine (agency/communion)
-  ├── Dynamic tone (continuous PAD→tone + OCEAN modulation)
-  ├── OCEAN drift (every 10 turns, max 0.005/step)
-  ├── Reflection tree (importance-threshold triggered)
-  └── idle_tick (PAD spring-restore toward baseline, spring_k=0.01)
-```
-
-### Request lifecycle
-
-**Direct mode** (unchanged):
-1. CLI calls `agent.ainvoke({"messages": [SystemMessage(fragment), HumanMessage(msg)]}, config)` with thread_id
-2. LangGraph checkpoint loads conversation state
-3. deepagents middleware pipeline
-4. LLM called with all tools available
-5. Tool calls executed, response extracted
-6. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
-7. State checkpointed by LangGraph
-
-**Gateway mode** (HTTP + SSE, FastAPI):
-1. Client sends `POST /chat` with `{"text": "..."}` via HTTP (or Web UI browser fetch)
-2. FastAPI endpoint → router._handle_chat_streaming() async generator
-3. Agent astream_events → SSE event frames pushed to client
-4. MindEngine.process_event() runs post-response: OCC+IPC → PAD → tone → importance → reflection → drift → save
-5. Response `{"type": "chat_response", "payload": {"text": "...", "tone": {...}}}` sent back
-6. BackgroundRunner maintains independent life rhythm: PAD idle drift, diary scheduling, memory decay
-7. StaticFiles mount serves `web/dist/` at `/` with SPA fallback (html=True)
+LingYa 基于 **deepagents** 构建，两种运行模式：
+- **Direct mode** (`python main.py`): CLI 进程内直连 agent
+- **Gateway mode** (`python main.py start`): 常驻 daemon + HTTP/SSE 多客户端
 
 ### Modules at a glance
 
-| Module | Role | Key detail |
-|--------|------|------------|
-| `main.py` | Assembly | Wires model + tools + middleware + MindEngine; 3 entry points: --daemon / start / default |
-| `lingya/cli.py` | Terminal UI | Rich-based, dual mode: direct (`run()`) + HTTP/SSE client |
-| `lingya/config.py` | Config | Pydantic + YAML + env overlay |
-| `lingya/gateway/` | Multi-entry | Daemon, FastAPI SSE server, message router, HTTP client, auth, BackgroundRunner, Settings API |
-| `web/` | Web UI | Vite 6 + React 19 + TypeScript + Tailwind CSS 4, chat window + settings panel, SSE streaming |
-| `lingya/mind/` | Personality | Dynamic engine: OCC emotion → PAD → tone → OCEAN drift → reflection → idle_tick |
-| `lingya/memory/` | Memory | ChromaDB-backed, importance-weighted, three-level decay (retrieval_weight), recover |
-| `lingya/storage/` | Persistence | SQLite via aiosqlite, mind_state table (+ raw conn for LangGraph checkpoints) |
-| `lingya/diary.py` | Diary | Markdown diary generation in LingYa's voice, one per day |
-| `lingya/reflection.py` | Opening | Generates context-aware opening line for returning users |
+| Module | Role |
+|--------|------|
+| `main.py` | Assembly: model + tools + middleware + MindEngine |
+| `lingya/cli.py` | Terminal UI (Rich), dual mode: direct + HTTP client |
+| `lingya/config.py` | Config (Pydantic + YAML + env overlay) |
+| `lingya/gateway/` | Multi-entry: daemon, FastAPI SSE server, router, auth, BackgroundRunner, Settings API |
+| `web/` | Web UI: Vite 6 + React 19 + TypeScript + Tailwind 4 |
+| `lingya/mind/` | Personality: OCC→PAD→tone→OCEAN drift→reflection→idle_tick |
+| `lingya/memory/` | ChromaDB-backed, importance-weighted, three-level decay |
+| `lingya/storage/` | SQLite via aiosqlite (mind_state + LangGraph checkpoints) |
+| `lingya/diary.py` | Markdown diary in LingYa's voice |
+| `lingya/reflection.py` | Context-aware opening line |
+
+完整拓扑、数据流、接口契约见 @product/reference/architecture.md。架构变化时同步更新该文档。
 
 ### Configuration
-- `config.yaml` — runtime settings (safe to commit): LLM, db_path, memory_path, data_dir, `otel.enabled` (toggles Traceloop auto-instrumentation)
-- `agent_config.yaml` — mind config: identity, OCEAN traits, tone_matrix, behavior_guardrails
-- `agent_config.example.yaml` — template for new setups
-
+- `config.yaml` — runtime settings (LLM, db_path, memory_path, otel)
+- `agent_config.yaml` — mind config (identity, OCEAN, tone, guardrails)
 - `.env` — secrets: `DEEPSEEK_API_KEY`, `LINGYA_API_KEY`
-- `TRACELOOP_TRACE_CONTENT=false` — omit prompt/completion content from OTel spans (privacy)
 
-## 协作流程
+## 🤝 Domain Boundaries (CRITICAL)
 
-**用户掌方向，Claude 执引擎。**
+三方协作，各管一层。`product/context/` 全员只读。
 
-| | 用户 | Claude |
+| Role | Owns (writes) | Reads |
+|------|---------------|-------|
+| **PM** (via @product-agent) | — | context/, plan/, specs/, capabilities |
+| **Architect** (via @architect-agent) | — | roadmap, ADRs, architecture.md, lingya/ code |
+| **Coding** (主 agent = you) | `lingya/` `tests/` `product/plan/` `product/specs/` `product/decisions/` `product/reference/architecture.md` | roadmap (current version), PRD, ADRs |
+
+**关键约束**：subagent（PM/Architect）只做只读分析，返回建议。所有 `product/` 文档写入由主 agent（你）在用户确认后执行。这保证用户确认前 roadmap/PRD/ADR 不被污染。
+
+## 🔄 Multi-Agent Pipelines
+
+你（主 agent）是**编排器 + 对话主体 + 编码执行者 + 唯一的 `product/` 文档写入者**。
+
+subagent 是只读分析工具，**无持续上下文**——它们看不到对话历史，每次 spawn 都是全新开始。所以讨论在你这里发生，subagent 只做单次分析后返回结论。
+
+### Pipeline A: 新功能与产品演进
+
+当用户提出产品想法或功能需求时：
+
+1. **对齐理解**：先和用户快速确认范围（"这个需求我理解是 XX，建议放 v0.x？"）。不急着 spawn。
+2. **产品分析**：spawn `@product-agent`，传递原始想法 + 对齐结果。PM 只读分析，返回方案建议（含 user story + 验收标准 + 不做清单 + 优先级理由）。
+3. **方案讨论**：把 PM 建议总结给用户讨论。可能多轮——用户反馈后可再 spawn PM 带着反馈重新分析。
+4. **写入规划**（用户确认后）：你将定稿方案写入 `product/plan/roadmap.md` 对应版本 + 创建 `product/specs/PRD-NNN-*.md`。
+5. **架构评审**：spawn `@architect-agent`，传递定稿方案。Architect 只读评审，返回 ADR 草稿 + 破坏性变更提示。
+6. **ADR 确认**：把 ADR 草稿总结给用户确认。确认后你写入 `product/decisions/ADR-NNN-*.md`。
+7. **编码执行**：用户确认后，按 roadmap 当前版本的实现步骤 TDD 编码。每个 Step 完成立即 commit。
+
+### Pipeline B: 纯架构改进
+
+当用户有单纯的技术/架构改进想法（不涉及产品功能）：
+
+1. **对齐理解**：和用户确认改进目标。
+2. **架构分析**：spawn `@architect-agent`，传递改进想法。Architect 只读分析，返回 ADR 草稿。
+3. **讨论确认**：把 ADR 草稿总结给用户讨论。确认后你写入 `product/decisions/ADR-NNN-*.md`。
+4. **编码执行**：按 ADR 在 `lingya/` 中执行代码修改。
+
+### Pipeline C: 版本交付闭环
+
+编码完成后（所有 Step 完成 + 测试通过）：
+
+1. **产品验收**：spawn `@product-agent`，传递 roadmap 当前版本的验收标准。PM 对照检查，返回验收结果（PASS/FAIL + 证据）。
+2. **更新文档**（验收通过后）：你更新 `product/specs/capabilities.md`（新功能状态）+ `product/plan/roadmap.md`（版本状态改为已完成）。
+3. **架构同步**：spawn `@architect-agent`，传递"版本交付，请更新架构文档"。Architect 读 `lingya/` 真实代码，返回 architecture.md 更新建议。你确认后写入 `product/reference/architecture.md`。
+
+## 协作流程总则
+
+**用户掌方向，你执引擎。**
+
+| | 用户 | 主 agent (you) |
 |---|---|---|
 | 角色 | 决定做什么、方案行不行 | 想清楚怎么做、主动暴露歧义 |
 | 简单任务 | 一句话指令 | 直接改，改完一句话告知 |
-| 非平凡任务 | 确认或调整方案方向 | 先说明改哪些文件、为什么这样改、有什么取舍需要拍板，得到确认后再动手 |
-| 架构变化 | — | 改完后同步更新 CLAUDE.md + `product/reference/architecture.md` |
+| 非平凡任务 | 确认或调整方案方向 | 先说明改哪些文件、为什么、有什么取舍，得到确认后再动手 |
+| 架构变化 | — | 改完后同步更新 architecture.md |
 
 核心：**动手前你说了算，动手后让你知道。**
