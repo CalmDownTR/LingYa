@@ -363,6 +363,47 @@ class MessageRouter:
             return "\n".join(parts) if parts else ""
         return str(raw)
 
+    @staticmethod
+    def _extract_text_content_from_value(value) -> str:
+        """Normalise an arbitrary *value* to a plain string.
+
+        Like :meth:`_extract_text_content` but operates on a raw value
+        (e.g. ``accumulated_text`` that might have been corrupted) rather
+        than an ``AIMessage`` attribute.  Also handles the case where
+        ``json.dumps(default=str)`` has already converted a ContentBlock
+        list into its Python repr string.
+        """
+        if isinstance(value, str):
+            # Could be a repr-of-list like "[{'type': 'text', ...}]"
+            stripped = value.strip()
+            if stripped.startswith("[") and "'type'" in stripped:
+                try:
+                    parsed = eval(stripped, {"__builtins__": {}}, {})
+                    if isinstance(parsed, list):
+                        parts: list[str] = []
+                        for block in parsed:
+                            if (
+                                isinstance(block, dict)
+                                and block.get("type") == "text"
+                            ):
+                                text = block.get("text", "")
+                                if isinstance(text, str):
+                                    parts.append(text)
+                        if parts:
+                            return "\n".join(parts)
+                except Exception:
+                    pass
+            return value
+        if isinstance(value, list):
+            parts: list[str] = []
+            for block in value:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts) if parts else ""
+        return str(value) if value is not None else ""
+
     async def _handle_settings(self, payload: dict) -> dict:
         """Handle settings get/update/reset operations."""
         from lingya.mind.engine import TONE_PRESETS
@@ -735,11 +776,16 @@ class MessageRouter:
                 },
             }
 
-            # Yield final response
+            # Yield final response — defensive normalisation in case
+            # accumulated_text somehow contains non-string data.
             yield {
                 "type": "chat_response",
                 "payload": {
-                    "text": accumulated_text,
+                    "text": (
+                        accumulated_text
+                        if isinstance(accumulated_text, str)
+                        else self._extract_text_content_from_value(accumulated_text)
+                    ),
                     "tone": tone,
                     "meta": {"engine_ms": engine_ms},
                 },
@@ -766,10 +812,13 @@ class MessageRouter:
         except Exception as e:
             return {"type": "error", "payload": {"message": str(e)}}
 
-        # Extract response text
+        # Extract response text — AIMessage.content may be a ContentBlock
+        # list in newer LangChain versions; normalise to plain string.
         msgs = result.get("messages", [])
         ais = [m for m in msgs if isinstance(m, AIMessage)]
-        response_text = ais[-1].text if ais else ""
+        response_text = (
+            self._extract_text_content(ais[-1]) if ais else ""
+        )
 
         # Process through MindEngine
         t_engine = time.monotonic()

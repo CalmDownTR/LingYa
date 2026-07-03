@@ -12,9 +12,33 @@ interface Props {
  * content can be a ContentBlock list ``[{"type":"text","text":"..."}]``
  * in some versions.  This helper extracts text from that shape as a
  * defence-in-depth measure.
+ *
+ * Also handles the case where Python's ``repr()`` or ``json.dumps(default=str)``
+ * has already stringified the list into ``"[{'type': 'text', ...}]"``.
  */
 function normaliseContent(raw: unknown): string {
-  if (typeof raw === 'string') return raw.trim()
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    // Detect Python-repr of a ContentBlock list
+    if (trimmed.startsWith("[") && /'type'\s*:\s*'text'/.test(trimmed)) {
+      try {
+        // Safe-ish parse for Python-style repr (single-quoted keys)
+        const normalized = trimmed.replace(/'/g, '"')
+        const parsed: Array<Record<string, unknown>> = JSON.parse(normalized)
+        const parts: string[] = []
+        for (const block of parsed) {
+          if (block?.type === 'text' && typeof block?.text === 'string') {
+            parts.push(block.text)
+          }
+        }
+        if (parts.length > 0) return parts.join('\n')
+      } catch {
+        // fall through to return trimmed string
+      }
+    }
+    return trimmed
+  }
+
   if (Array.isArray(raw)) {
     const parts: string[] = []
     for (const block of raw) {
@@ -29,6 +53,7 @@ function normaliseContent(raw: unknown): string {
     }
     return parts.join('\n')
   }
+
   return ''
 }
 
