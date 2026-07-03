@@ -65,6 +65,20 @@ export interface LingYaEvent {
   payload: Record<string, unknown>
 }
 
+/** Process phase from LingYaInnerProcessTransformer */
+export type ProcessPhase = 'recalling' | 'thinking' | 'generating'
+
+/** process.phase event payload */
+export interface ProcessPhasePayload {
+  phase: ProcessPhase
+}
+
+/** memory.recall event payload */
+export interface MemoryRecallPayload {
+  count: number
+  top_match: string
+}
+
 /** Chat response from SSE */
 export interface ChatResponsePayload {
   type: 'chat_response'

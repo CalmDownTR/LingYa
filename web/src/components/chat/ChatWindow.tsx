@@ -6,7 +6,9 @@ import { MessageBubble } from './MessageBubble'
 import { ChatInput } from './ChatInput'
 import { SessionDrawer } from '../sessions/SessionDrawer'
 import { SettingsPanel } from '../settings/SettingsPanel'
+import { PhaseIndicator } from './PhaseIndicator'
 import type { ChatMessage } from '../../types'
+import type { ProcessPhase, ProcessPhasePayload, MemoryRecallPayload } from '../../types'
 
 export function ChatWindow() {
   const [streamingContent, setStreamingContent] = useState('')
@@ -14,6 +16,8 @@ export function ChatWindow() {
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [currentPhase, setCurrentPhase] = useState<ProcessPhase | null>(null)
+  const [memoryRecall, setMemoryRecall] = useState<MemoryRecallPayload | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { startStream, isStreaming, abort } = useSSE()
   // Track the last thread_id we synced FROM the server, so we can detect
@@ -107,6 +111,8 @@ export function ChatWindow() {
       }
       setSentMessages((prev) => [...prev, userMsg])
       setStreamingContent('')
+      setCurrentPhase(null)
+      setMemoryRecall(null)
 
       let herContent = ''
 
@@ -114,6 +120,15 @@ export function ChatWindow() {
         onDelta: (content) => {
           herContent += content
           setStreamingContent(herContent)
+        },
+        onEvent: (event) => {
+          if (event.event === 'process.phase') {
+            const payload = event.payload as unknown as ProcessPhasePayload
+            setCurrentPhase(payload.phase)
+          } else if (event.event === 'memory.recall') {
+            const payload = event.payload as unknown as MemoryRecallPayload
+            setMemoryRecall(payload)
+          }
         },
         onComplete: (response) => {
           const herMsg: ChatMessage = {
@@ -124,6 +139,8 @@ export function ChatWindow() {
           }
           setSentMessages((prev) => [...prev, herMsg])
           setStreamingContent('')
+          setCurrentPhase(null)
+          setMemoryRecall(null)
         },
         onError: (err) => {
           console.error('Chat error:', err)
@@ -137,6 +154,8 @@ export function ChatWindow() {
             setSentMessages((prev) => [...prev, herMsg])
           }
           setStreamingContent('')
+          setCurrentPhase(null)
+          setMemoryRecall(null)
         },
       })
     },
@@ -212,6 +231,14 @@ export function ChatWindow() {
           {messages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
           ))}
+
+          {/* Process phase indicator — shows what LingYa is doing before/during streaming */}
+          {isStreaming && currentPhase && (
+            <PhaseIndicator
+              phase={currentPhase}
+              memoryRecall={memoryRecall}
+            />
+          )}
 
           {streamingContent && (
             <MessageBubble
