@@ -50,26 +50,29 @@ export function useSSE() {
         if (done) break
 
         buffer += decoder.decode(value, { stream: true })
+        // Split on LF, handling both LF and CRLF line endings.
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.type === 'event' && data.event === 'chat.delta') {
-                callbacks.onDelta?.(data.payload.content)
-              } else if (data.type === 'event') {
-                callbacks.onEvent?.(data)
-              } else if (data.type === 'chat_response') {
-                callbacks.onComplete?.(data)
-              } else if (data.type === 'error') {
-                throw new Error(data.payload?.message || 'Unknown error')
-              }
-            } catch (e) {
-              if (e instanceof SyntaxError) continue // skip parse errors
-              throw e
+        for (const rawLine of lines) {
+          // Strip trailing CR for CRLF robustness.
+          const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+          if (!line.startsWith('data: ')) continue
+
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'event' && data.event === 'chat.delta') {
+              callbacks.onDelta?.(data.payload.content as string)
+            } else if (data.type === 'event') {
+              callbacks.onEvent?.(data)
+            } else if (data.type === 'chat_response') {
+              callbacks.onComplete?.(data)
+            } else if (data.type === 'error') {
+              throw new Error((data.payload?.message as string) || 'Unknown error')
             }
+          } catch (e) {
+            if (e instanceof SyntaxError) continue // skip parse errors
+            throw e
           }
         }
       }

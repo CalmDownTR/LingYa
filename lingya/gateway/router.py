@@ -5,6 +5,7 @@ Does NOT know about WebSocket. Testable without network.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -605,8 +606,6 @@ class MessageRouter:
         The caller decides how to deliver these — emit callback (backward compat),
         SSE frames (FastAPI), or any other transport.
         """
-        from lingya.transformers import create_lingya_transformer
-
         accumulated_text = ""
 
         try:
@@ -614,7 +613,21 @@ class MessageRouter:
                 {"messages": messages},
                 config,
                 version="v3",
-                transformers=[create_lingya_transformer],
+            )
+
+            # Start MindEngine processing concurrently — runs while LLM streams.
+            # process_event does 1 LLM call (~1.5s timeout) + DB save + event publish.
+            # By the time the stream ends, it's likely already done, eliminating
+            # the visible gap between last token and "complete" signal.
+            t_engine = time.monotonic()
+            engine_task = asyncio.create_task(
+                self._engine.process_event({
+                    "event_type": "outcome",
+                    "valence": "neutral",
+                    "focus": "self",
+                    "description": user_text,
+                    "content": user_text,
+                })
             )
 
             async for event in run:
@@ -642,18 +655,20 @@ class MessageRouter:
                         "payload": inner_event["payload"],
                     }
 
-            # 4. Process through MindEngine
-            t_engine = time.monotonic()
-            await self._engine.process_event({
-                "event_type": "outcome",
-                "valence": "neutral",
-                "focus": "self",
-                "description": user_text,
-                "content": user_text,
-            })
+            # Wait for engine with brief grace period — it's likely already
+            # done since streaming takes longer than the 1.5s LLM timeout.
+            try:
+                await asyncio.wait_for(engine_task, timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
             engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
+
+            # Fire-and-forget: response alignment check runs in background.
+            # Result (reanchor hint) affects subsequent turns, not this one.
             if accumulated_text:
-                await self._engine.check_response_alignment(accumulated_text)
+                asyncio.create_task(
+                    self._engine.check_response_alignment(accumulated_text)
+                )
 
             # Yield mind.transition
             tone = self._engine.get_tone_params()

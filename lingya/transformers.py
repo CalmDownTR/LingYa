@@ -46,7 +46,6 @@ class LingYaInnerProcessTransformer(StreamTransformer):
 
         # Phase tracking — starts as None so the first detected phase always emits
         self._current_phase: str | None = None
-        self._phase_emitted: set[str] = set()
 
         # Memory recall tracking
         self._memory_tool_count: int = 0

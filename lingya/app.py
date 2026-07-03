@@ -16,6 +16,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from deepagents.middleware.summarization import create_summarization_tool_middleware
+from langchain.agents.middleware import AgentMiddleware
 
 from lingya.config import Config
 from lingya.events import EventBus
@@ -25,6 +26,21 @@ from lingya.mind import MindEngine, build_static_prompt
 from lingya.mind.config import MindConfig
 from lingya.storage.db import Database
 from lingya.tools.memory_tools import create_memory_tools
+from lingya.transformers import create_lingya_transformer
+
+
+class LingYaStreamingMiddleware(AgentMiddleware):
+    """Middleware that registers the LingYa inner-process stream transformer.
+
+    The transformer injects ``process.phase`` and ``memory.recall`` events
+    into the v3 protocol stream so the SSE transport can surface them as
+    user-visible event frames.
+
+    Registered as a middleware transformer (not inline) so ordering relative
+    to built-in transformers (``ToolCallTransformer`` etc.) is deterministic.
+    """
+
+    transformers = (create_lingya_transformer,)
 
 
 @dataclass
@@ -181,6 +197,7 @@ class ApplicationBuilder:
                 model=self._model,
                 tools=[*mcp_tools, *memory_tools, *self._extra_tools],
                 middleware=[
+                    LingYaStreamingMiddleware(),
                     create_summarization_tool_middleware(self._model, backend=backend),
                 ],
                 system_prompt=self._static_prompt,
