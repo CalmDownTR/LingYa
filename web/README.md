@@ -1,75 +1,83 @@
-# React + TypeScript + Vite
+# LingYa Web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Browser-based chat interface for LingYa — the primary (and only) user interaction entry point since v0.9.4.
 
-Currently, two official plugins are available:
+## Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Vite 6** — build tool and dev server
+- **React 19** — UI framework
+- **TypeScript** — type safety
+- **Tailwind CSS 4** — utility-first styling (dark-only design)
+- **TanStack Query 5** — server state management and caching
+- **React Router 7** — SPA client-side routing
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+cd web
+npm install
+npm run dev        # Dev server at http://localhost:5173, proxies /api → localhost:8765
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The dev server proxies API requests to the Python daemon — make sure `python main.py` is running on port 8765.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Production Build
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm run build      # Outputs to web/dist/
 ```
+
+The Python daemon serves `web/dist/` via FastAPI `StaticFiles` at `/` (with SPA fallback: `html=True`). If `web/dist/` does not exist at startup, the daemon prints a note and runs without Web UI.
+
+## Testing
+
+```bash
+npm test           # Vitest + @testing-library/react in happy-dom
+```
+
+## Architecture
+
+```text
+src/
+├── App.tsx                  React Router SPA shell
+├── main.tsx                 Entry point (mount to #root)
+├── types.ts                 Shared TypeScript types
+├── lib/
+│   └── api.ts               TanStack Query hooks (fetch + Bearer auth)
+├── hooks/
+│   ├── useSSE.ts            SSE consumer (fetch + ReadableStream, POST /chat)
+│   └── useApi.ts            REST fetch wrapper (Bearer auth)
+└── components/
+    ├── chat/
+    │   ├── ChatWindow.tsx        Main chat interface (route "/")
+    │   ├── MessageList.tsx       Message list with auto-scroll
+    │   ├── MessageBubble.tsx     Markdown rendering + streaming cursor + ContentBlock parsing
+    │   ├── ChatInput.tsx         Text input with send
+    │   └── PhaseIndicator.tsx    Process phase animation (recalling/thinking/generating)
+    ├── settings/
+    │   ├── SettingsPanel.tsx     Settings dashboard
+    │   ├── OCEANSliders.tsx      Five-dimension personality sliders
+    │   ├── IdentityEditor.tsx    Identity name + personality description
+    │   └── TonePresetPicker.tsx  Tone preset selector (5 presets)
+    └── sessions/
+        ├── SessionDrawer.tsx     Session list drawer
+        └── SessionItem.tsx       Individual session entry
+```
+
+### SSE Streaming Flow
+
+```text
+User types message → POST /chat (fetch)
+  → ReadableStream consumes SSE frames:
+    {"type":"event","event":"process.phase","payload":{"phase":"thinking"}}
+    {"type":"event","event":"memory.recall","payload":{"count":3,"top_match":"..."}}
+    {"type":"event","event":"chat.delta","payload":{"content":"..."}}
+    {"type":"event","event":"mind.transition","payload":{"pad":{...},"occ_emotion":"..."}}
+    {"type":"chat_response","payload":{"text":"...","meta":{...}}}
+  → PhaseIndicator shows current stage
+  → MessageBubble renders streaming markdown with blinking cursor
+```
+
+### Settings Persistence
+
+Settings changes (OCEAN, identity, tone) go through `PUT /settings/*` endpoints. The Python daemon applies them to `MindEngine` immediately via `reload_config()` and persists to SQLite. No YAML file write-back — daemon restores from SQLite on restart.
