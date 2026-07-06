@@ -124,6 +124,7 @@ class ApplicationBuilder:
             config=self._mind_config,
             memory_store=self._memory,
             llm_call=llm_call,
+            embedding_fn=self._memory.get_embedding_fn(),
             event_bus=self._event_bus,
         )
         self._static_prompt = build_static_prompt(self._mind_config)

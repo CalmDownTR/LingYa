@@ -132,6 +132,21 @@ class EnhancedMemoryStore(MemoryStore):
     Extends MemoryStore — all existing methods unchanged.
     """
 
+    def get_embedding_fn(self) -> Callable[[str], list[float]]:
+        """Return an embedding function for identity alignment checks.
+
+        Uses ChromaDB's DefaultEmbeddingFunction (SentenceTransformer-based).
+        The returned function takes a single string and returns a float list.
+        """
+        if not hasattr(self, "_embedding_fn"):
+            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+
+            ef = DefaultEmbeddingFunction()
+            self._embedding_fn: Callable[[str], list[float]] = (
+                lambda text: ef([text])[0]
+            )
+        return self._embedding_fn
+
     def store_with_importance(self, text: str, importance: float = 5.0) -> str:
         """Store a memory with an importance score (1-10).
 
