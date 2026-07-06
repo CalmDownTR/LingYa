@@ -27,6 +27,9 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.63b1",
 ]
 
+[project.scripts]
+lingya = "lingya.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
