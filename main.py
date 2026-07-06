@@ -5,7 +5,6 @@ Usage:
   python main.py              Start daemon in foreground (Ctrl+C to stop)
   python main.py --stop       Gracefully stop a running daemon
   python main.py --status     Show daemon status (running / not running / ...)
-  python main.py --diary      Show the latest diary entry
 """
 
 from __future__ import annotations
@@ -224,51 +223,6 @@ def status(pid_file: str = DEFAULT_PID_FILE, port: int = DEFAULT_PORT) -> None:
     print(f"  Web UI will be at: http://localhost:{port}")
 
 
-# ── Diary ───────────────────────────────────────────────────────────────
-
-
-def diary(port: int = DEFAULT_PORT) -> None:
-    """Fetch and display the latest diary entry from the daemon."""
-    import json
-
-    import httpx
-
-    api_key = os.environ.get("LINGYA_API_KEY", "")
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    try:
-        resp = httpx.get(
-            f"http://localhost:{port}/diary",
-            params={"action": "read", "index": 0},
-            headers=headers,
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        if data.get("type") == "diary_response":
-            payload = data.get("payload", {})
-            entries = payload.get("entries", [])
-            if not entries:
-                print("No diary entries yet.")
-                return
-            entry = entries[0]
-            print(f"Diary — {entry.get('date', 'unknown date')}")
-            print("-" * 40)
-            print(entry.get("content", "(empty)"))
-        else:
-            print(f"Unexpected response: {json.dumps(data, indent=2)}")
-    except httpx.ConnectError:
-        print("Cannot connect to LingYa daemon. Is it running?")
-        print(f"  Check: python main.py --status")
-    except httpx.HTTPStatusError as e:
-        print(f"Error fetching diary: HTTP {e.response.status_code}")
-    except Exception as e:
-        print(f"Error: {e}")
-
-
 # ── CLI entry point ─────────────────────────────────────────────────────
 
 
@@ -277,7 +231,5 @@ if __name__ == "__main__":
         stop_daemon()
     elif "--status" in sys.argv:
         status()
-    elif "--diary" in sys.argv:
-        diary()
     else:
         asyncio.run(daemon_main())

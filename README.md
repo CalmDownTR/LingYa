@@ -32,7 +32,6 @@ Supports any OpenAI-compatible API via [LiteLLM](https://docs.litellm.ai/) — e
 | `python main.py` | Start daemon in foreground (Ctrl+C to stop) |
 | `python main.py --stop` | Gracefully stop a running daemon |
 | `python main.py --status` | Show daemon running status |
-| `python main.py --diary` | Show the latest diary entry |
 | `lingya start` | Start via console entry point |
 | `lingya stop` | Stop via console entry point |
 | `lingya status` | Status via console entry point |
