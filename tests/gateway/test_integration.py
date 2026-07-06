@@ -27,6 +27,8 @@ class TestDaemonLifecycle:
         This would have caught the checkpointer.setup() AttributeError
         because _init_agent runs for real against a real SQLite database.
         """
+        import httpx
+
         from lingya.config import Config
         from lingya.mind.config import (
             BigFiveTraits,
@@ -35,7 +37,6 @@ class TestDaemonLifecycle:
             PersonaMeta,
             ToneMatrix,
         )
-        from lingya.gateway.client import GatewayClient
 
         TEST_PORT = 18765
         db_path = str(tmp_path / "lingya.db")
@@ -105,16 +106,11 @@ class TestDaemonLifecycle:
                     pytest.fail("Daemon did not write PID file within 5 seconds")
 
                 # Connect via HTTP client — PID file signals server readiness
-                client = GatewayClient(port=TEST_PORT)
-                await client.connect()
-                assert client.is_connected
-
-                # Ping → /health returns {"status": "ok"}
-                response = await client.send({"type": "ping", "payload": {}})
-                assert response == {"status": "ok"}
-
-                await client.close()
-                assert not client.is_connected
+                async with httpx.AsyncClient(base_url=f"http://localhost:{TEST_PORT}") as http:
+                    # Ping → /health returns {"status": "ok"}
+                    resp = await http.get("/health")
+                    assert resp.status_code == 200
+                    assert resp.json() == {"status": "ok"}
 
             finally:
                 # Trigger graceful shutdown — simulates daemon_main() lifecycle
@@ -130,6 +126,8 @@ class TestDaemonLifecycle:
 
         This is the integration-level assertion of the ordering bug fix.
         """
+        import httpx
+
         from lingya.config import Config
         from lingya.mind.config import (
             BigFiveTraits,
@@ -138,7 +136,6 @@ class TestDaemonLifecycle:
             PersonaMeta,
             ToneMatrix,
         )
-        from lingya.gateway.client import GatewayClient
 
         TEST_PORT = 18766
         pid_file = str(tmp_path / "lingya.pid")
@@ -199,14 +196,10 @@ class TestDaemonLifecycle:
 
                 # If PID file is the readiness signal, the server must be
                 # reachable immediately — no additional wait needed
-                client = GatewayClient(port=TEST_PORT)
-                await client.connect()
-                assert client.is_connected
-
-                response = await client.send({"type": "ping", "payload": {}})
-                assert response == {"status": "ok"}
-
-                await client.close()
+                async with httpx.AsyncClient(base_url=f"http://localhost:{TEST_PORT}") as http:
+                    resp = await http.get("/health")
+                    assert resp.status_code == 200
+                    assert resp.json() == {"status": "ok"}
 
             finally:
                 daemon._shutdown_event.set()
