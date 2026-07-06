@@ -36,14 +36,14 @@ class LiteLLMModel(BaseChatModel):
     # Allow extra fields set by ApplicationBuilder (e.g. "profile")
     model_config = {"extra": "allow"}
 
-    def _to_litellm_messages(self, messages: list[BaseMessage]) -> list[dict[str, str]]:
-        """Convert LangChain messages to litellm dict format."""
-        role_map = {
-            "system": "system",
-            "human": "user",
-            "ai": "assistant",
-        }
-        result: list[dict[str, str]] = []
+    def _to_litellm_messages(self, messages: list[BaseMessage]) -> list[dict[str, Any]]:
+        """Convert LangChain messages to litellm dict format.
+
+        Supports Human, System, AI (with optional tool_calls), and Tool messages.
+        """
+        from langchain_core.messages import ToolMessage
+
+        result: list[dict[str, Any]] = []
         for msg in messages:
             if isinstance(msg, SystemMessage):
                 role = "system"
@@ -51,11 +51,28 @@ class LiteLLMModel(BaseChatModel):
                 role = "user"
             elif isinstance(msg, AIMessage):
                 role = "assistant"
+            elif isinstance(msg, ToolMessage):
+                entry: dict[str, Any] = {
+                    "role": "tool",
+                    "content": msg.content if isinstance(msg.content, str) else str(msg.content),
+                }
+                if hasattr(msg, "tool_call_id") and msg.tool_call_id:
+                    entry["tool_call_id"] = msg.tool_call_id
+                result.append(entry)
+                continue
             else:
                 role = getattr(msg, "type", "user")
-                role = role_map.get(role, "user")
+
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            result.append({"role": role, "content": content})
+            entry = {"role": role, "content": content}
+
+            # Preserve tool_calls on AIMessage for function calling
+            if isinstance(msg, AIMessage):
+                tc = getattr(msg, "tool_calls", None)
+                if tc:
+                    entry["tool_calls"] = tc
+
+            result.append(entry)
         return result
 
     def _generate(
@@ -68,7 +85,19 @@ class LiteLLMModel(BaseChatModel):
         """Call litellm.completion and return a LangChain ChatResult."""
         import litellm
 
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
         litellm_messages = self._to_litellm_messages(messages)
+
+        # Forward bound tools to litellm in OpenAI function calling format.
+        # setdefault ensures DeepAgents-supplied tools in kwargs take precedence.
+        tools = getattr(self, "_bound_tools", None)
+        if tools:
+            openai_tools = [convert_to_openai_tool(t) for t in tools]
+            kwargs.setdefault("tools", openai_tools)
+            tool_choice = getattr(self, "_bound_tools_kwargs", {}).get("tool_choice", "auto")
+            kwargs.setdefault("tool_choice", tool_choice)
+
         response = litellm.completion(
             model=self.model,
             messages=litellm_messages,
@@ -94,7 +123,18 @@ class LiteLLMModel(BaseChatModel):
         """Stream chunks via litellm.completion with stream=True."""
         import litellm
 
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
         litellm_messages = self._to_litellm_messages(messages)
+
+        # Forward bound tools to litellm in OpenAI function calling format.
+        tools = getattr(self, "_bound_tools", None)
+        if tools:
+            openai_tools = [convert_to_openai_tool(t) for t in tools]
+            kwargs.setdefault("tools", openai_tools)
+            tool_choice = getattr(self, "_bound_tools_kwargs", {}).get("tool_choice", "auto")
+            kwargs.setdefault("tool_choice", tool_choice)
+
         response = litellm.completion(
             model=self.model,
             messages=litellm_messages,
