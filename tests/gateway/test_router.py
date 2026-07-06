@@ -731,18 +731,18 @@ class TestSession:
 
     # ── Persistence tests ─────────────────────────────────────────
 
-    async def test_session_new_persists_thread_id(self, router, tmp_path):
+    async def test_session_new_persists_thread_id(self, router, session_service, tmp_path):
         """new action writes the thread_id to current_session.txt."""
         result = await router.route(
             {"type": "session", "payload": {"action": "new"}}
         )
         new_tid = result["payload"]["thread_id"]
 
-        persisted = router._current_session_file.read_text(encoding="utf-8")
+        persisted = session_service._current_session_file.read_text(encoding="utf-8")
         assert persisted == new_tid
 
     async def test_session_switch_persists_thread_id(
-        self, router, mock_db, tmp_path
+        self, router, mock_db, session_service, tmp_path
     ):
         """switch action writes the new thread_id to current_session.txt."""
         mock_cursor = MagicMock()
@@ -753,7 +753,7 @@ class TestSession:
             {"type": "session", "payload": {"action": "switch", "thread_id": "ws-persist"}}
         )
 
-        persisted = router._current_session_file.read_text(encoding="utf-8")
+        persisted = session_service._current_session_file.read_text(encoding="utf-8")
         assert persisted == "ws-persist"
 
 
@@ -764,30 +764,24 @@ class TestRouterInit:
     def test_router_loads_persisted_thread_id_on_init(
         self, mock_engine, mock_memory, mock_db, mock_agent, tmp_path
     ):
-        """Router __init__ restores the persisted thread_id if present."""
+        """SessionService restores the persisted thread_id if present."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        # Pre-write a persisted session
         (data_dir / "current_session.txt").write_text("ws-restored", encoding="utf-8")
 
-        from lingya.gateway.router import MessageRouter
-        r = MessageRouter(
-            mock_engine, mock_memory, mock_db, str(data_dir), agent=mock_agent
-        )
+        from lingya.gateway.session_service import SessionService
+        s = SessionService(db=mock_db, data_dir=str(data_dir))
 
-        assert r._thread_id == "ws-restored"
+        assert s.thread_id == "ws-restored"
 
     def test_router_falls_back_to_default_when_no_persisted_session(
         self, mock_engine, mock_memory, mock_db, mock_agent, tmp_path
     ):
-        """Router __init__ uses the constructor default if no persisted file."""
+        """SessionService uses the constructor default if no persisted file."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        from lingya.gateway.router import MessageRouter
-        r = MessageRouter(
-            mock_engine, mock_memory, mock_db, str(data_dir),
-            agent=mock_agent, thread_id="ws-fallback",
-        )
+        from lingya.gateway.session_service import SessionService
+        s = SessionService(db=mock_db, data_dir=str(data_dir), thread_id="ws-fallback")
 
-        assert r._thread_id == "ws-fallback"
+        assert s.thread_id == "ws-fallback"

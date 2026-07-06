@@ -74,18 +74,76 @@ def mock_agent():
 
 
 @pytest.fixture
-def router(mock_engine, mock_memory, mock_db, mock_agent, tmp_path):
-    """MessageRouter with mocked dependencies, including agent."""
-    from lingya.gateway.router import MessageRouter
+def session_service(mock_db, tmp_path):
+    """SessionService with mock DB."""
+    from lingya.gateway.session_service import SessionService
 
     data_dir = str(tmp_path / "data")
-    return MessageRouter(mock_engine, mock_memory, mock_db, data_dir, agent=mock_agent)
+    return SessionService(db=mock_db, data_dir=data_dir)
 
 
 @pytest.fixture
-def router_no_agent(mock_engine, mock_memory, mock_db, tmp_path):
-    """MessageRouter without agent (backward compat / error case)."""
+def settings_service(mock_engine):
+    """SettingsService with mock engine."""
+    from lingya.gateway.settings_service import SettingsService
+
+    return SettingsService(engine=mock_engine)
+
+
+@pytest.fixture
+def chat_handler(mock_engine, mock_agent, session_service):
+    """ChatHandler with mock engine, agent, and session service."""
+    from lingya.gateway.chat_handler import ChatHandler
+
+    # Wire agent into session_service for history loading
+    session_service.set_agent(mock_agent)
+
+    return ChatHandler(
+        engine=mock_engine,
+        agent=mock_agent,
+        session_service=session_service,
+    )
+
+
+@pytest.fixture
+def chat_handler_no_agent(mock_engine, session_service):
+    """ChatHandler without agent (error case)."""
+    from lingya.gateway.chat_handler import ChatHandler
+
+    return ChatHandler(
+        engine=mock_engine,
+        agent=None,
+        session_service=session_service,
+    )
+
+
+@pytest.fixture
+def router(mock_engine, mock_memory, session_service, settings_service, chat_handler, tmp_path):
+    """MessageRouter with mocked dependencies."""
     from lingya.gateway.router import MessageRouter
 
     data_dir = str(tmp_path / "data")
-    return MessageRouter(mock_engine, mock_memory, mock_db, data_dir, agent=None)
+    return MessageRouter(
+        engine=mock_engine,
+        memory=mock_memory,
+        data_dir=data_dir,
+        session_service=session_service,
+        settings_service=settings_service,
+        chat_handler=chat_handler,
+    )
+
+
+@pytest.fixture
+def router_no_agent(mock_engine, mock_memory, session_service, settings_service, chat_handler_no_agent, tmp_path):
+    """MessageRouter without agent (error case)."""
+    from lingya.gateway.router import MessageRouter
+
+    data_dir = str(tmp_path / "data")
+    return MessageRouter(
+        engine=mock_engine,
+        memory=mock_memory,
+        data_dir=data_dir,
+        session_service=session_service,
+        settings_service=settings_service,
+        chat_handler=chat_handler_no_agent,
+    )

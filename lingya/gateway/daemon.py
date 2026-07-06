@@ -37,7 +37,6 @@ class GatewayDaemon:
     async def start(self) -> None:
         """Assemble application, start HTTP+SSE server, block until shutdown."""
         from lingya.app import ApplicationBuilder
-        from lingya.gateway.router import MessageRouter
         from lingya.gateway.server import create_app
 
         # 0. Auto-instrumentation via OpenLLMetry (no-op if otel.enabled=False).
@@ -59,11 +58,30 @@ class GatewayDaemon:
             .build()
         )
 
-        # 2. Create router
-        router = MessageRouter(
-            engine=self._app.engine, memory=self._app.memory,
+        # 2. Create services + router
+        from lingya.gateway.chat_handler import ChatHandler
+        from lingya.gateway.router import MessageRouter
+        from lingya.gateway.session_service import SessionService
+        from lingya.gateway.settings_service import SettingsService
+
+        session_service = SessionService(
             db=self._app.db, data_dir=self.config.data_dir,
+        )
+        session_service.set_agent(self._app.agent)
+        settings_service = SettingsService(engine=self._app.engine)
+        chat_handler = ChatHandler(
+            engine=self._app.engine,
             agent=self._app.agent,
+            session_service=session_service,
+        )
+
+        router = MessageRouter(
+            engine=self._app.engine,
+            memory=self._app.memory,
+            data_dir=self.config.data_dir,
+            session_service=session_service,
+            settings_service=settings_service,
+            chat_handler=chat_handler,
         )
 
         # 3. Build FastAPI app + start uvicorn in background
@@ -71,6 +89,9 @@ class GatewayDaemon:
             router=router,
             auth_enabled=self.config.auth_enabled,
             shutdown_callback=self._shutdown_event.set,
+            session_service=session_service,
+            settings_service=settings_service,
+            chat_handler=chat_handler,
         )
 
         uvicorn_config = uvicorn.Config(

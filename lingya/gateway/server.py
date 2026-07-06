@@ -69,6 +69,9 @@ def create_app(
     title: str = "LingYa Gateway",
     version: str = "0.9.0",
     shutdown_callback: Any = None,
+    session_service: Any = None,
+    settings_service: Any = None,
+    chat_handler: Any = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -79,6 +82,9 @@ def create_app(
         version: OpenAPI doc version.
         shutdown_callback: Optional callable invoked by POST /shutdown
             to trigger graceful daemon shutdown.
+        session_service: SessionService (v0.9.5 — replaces router._handle_session).
+        settings_service: SettingsService (v0.9.5 — replaces router._handle_settings).
+        chat_handler: ChatHandler (v0.9.5 — replaces router._handle_chat*).
     """
     app = FastAPI(title=title, version=version)
     auth = create_auth_dependency(auth_enabled=auth_enabled)
@@ -129,23 +135,35 @@ def create_app(
                 status_code=400,
             )
 
-        if router._agent is None:
+        # Backward compat: use chat_handler if provided, else fall back to
+        # router delegation methods (tests inject mocks on router directly).
+        _chat = chat_handler if chat_handler is not None else router
+        _session = session_service if session_service is not None else router
+
+        if _chat is None or _chat._agent is None:
             return JSONResponse(
                 {"type": "error", "payload": {"message": "Agent not initialized"}},
                 status_code=503,
             )
 
-        # Build messages (same logic as router._handle_chat)
+        # Build messages
         fragment = router._engine.get_prompt_fragment()
         messages: list = [HumanMessage(content=body.text)]
         if fragment:
             messages.insert(0, SystemMessage(content=fragment))
-        config = {"configurable": {"thread_id": router._thread_id}}
+        # SessionService uses .thread_id, legacy router uses ._thread_id
+        tid = _session.thread_id if session_service is not None else _session._thread_id
+        config = {"configurable": {"thread_id": tid}}
 
         async def sse_generator():
-            """Iterate router's async generator and emit SSE frames."""
+            """Iterate the streaming generator and emit SSE frames."""
             t_start = time.monotonic()
-            async for event_dict in router._handle_chat_streaming(
+            # ChatHandler uses _chat_streaming, legacy router uses _handle_chat_streaming
+            if chat_handler is not None:
+                streamer = chat_handler._chat_streaming
+            else:
+                streamer = router._handle_chat_streaming
+            async for event_dict in streamer(
                 messages, config, body.text
             ):
                 # Inject ws_hop_ms as sse_hop_ms for observability
@@ -226,6 +244,8 @@ def create_app(
         })
 
     # ── Session ────────────────────────────────────────────────────
+    # Backward compat: use session_service if provided, else fall back
+    # to router._handle_session (tests inject mocks on router directly).
 
     @app.post("/session")
     async def post_session(
@@ -233,36 +253,41 @@ def create_app(
         action: str = Query("new"),
         _auth: bool = auth,
     ):
-        if router is None:
+        if router is None and session_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Session service not initialized"}},
                 status_code=503,
             )
-        # JSON body takes precedence over query param
         effective_action = body.action if body is not None else action
         effective_thread_id = body.thread_id if body is not None else None
 
         payload: dict = {"action": effective_action}
         if effective_thread_id:
             payload["thread_id"] = effective_thread_id
+        if session_service is not None:
+            return await session_service.handle_session(payload)
         return await router._handle_session(payload)
 
     @app.get("/session/list")
     async def list_sessions(_auth: bool = auth):
-        if router is None:
+        if router is None and session_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Session service not initialized"}},
                 status_code=503,
             )
+        if session_service is not None:
+            return await session_service.handle_session({"action": "list"})
         return await router._handle_session({"action": "list"})
 
     @app.get("/session/current")
     async def current_session(_auth: bool = auth):
-        if router is None:
+        if router is None and session_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Session service not initialized"}},
                 status_code=503,
             )
+        if session_service is not None:
+            return await session_service.handle_session({"action": "current"})
         return await router._handle_session({"action": "current"})
 
     @app.get("/session/history")
@@ -270,44 +295,50 @@ def create_app(
         thread_id: str | None = Query(None, description="Thread ID (defaults to current)"),
         _auth: bool = auth,
     ):
-        if router is None:
+        if router is None and session_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Session service not initialized"}},
                 status_code=503,
             )
         payload: dict = {"action": "history"}
         if thread_id:
             payload["thread_id"] = thread_id
+        if session_service is not None:
+            return await session_service.handle_session(payload)
         return await router._handle_session(payload)
 
-    # ── Settings ────────────────────────────────────────────────────────
+    # ── Settings ────────────────────────────────────────────────────
+    # Backward compat: use settings_service if provided, else fall back
+    # to router._handle_settings (tests inject mocks on router directly).
 
     @app.get("/settings")
     async def get_settings(_auth: bool = auth):
-        if router is None:
+        if router is None and settings_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Settings service not initialized"}},
                 status_code=503,
             )
+        if settings_service is not None:
+            return await settings_service.handle_settings({"action": "get"})
         return await router._handle_settings({"action": "get"})
 
     @app.put("/settings/ocean")
     async def update_ocean(body: OceanUpdateRequest, _auth: bool = auth):
-        if router is None:
+        if router is None and settings_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Settings service not initialized"}},
                 status_code=503,
             )
-        return await router._handle_settings({
-            "action": "update_ocean",
-            "ocean": body.model_dump(),
-        })
+        payload = {"action": "update_ocean", "ocean": body.model_dump()}
+        if settings_service is not None:
+            return await settings_service.handle_settings(payload)
+        return await router._handle_settings(payload)
 
     @app.put("/settings/identity")
     async def update_identity(body: IdentityUpdateRequest, _auth: bool = auth):
-        if router is None:
+        if router is None and settings_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Settings service not initialized"}},
                 status_code=503,
             )
         identity_data = body.model_dump(exclude_none=True)
@@ -316,30 +347,32 @@ def create_app(
                 {"type": "error", "payload": {"message": "No fields to update"}},
                 status_code=400,
             )
-        return await router._handle_settings({
-            "action": "update_identity",
-            "identity": identity_data,
-        })
+        payload = {"action": "update_identity", "identity": identity_data}
+        if settings_service is not None:
+            return await settings_service.handle_settings(payload)
+        return await router._handle_settings(payload)
 
     @app.put("/settings/tone")
     async def update_tone(body: ToneUpdateRequest, _auth: bool = auth):
-        if router is None:
+        if router is None and settings_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Settings service not initialized"}},
                 status_code=503,
             )
-        return await router._handle_settings({
-            "action": "update_tone",
-            "preset": body.preset,
-        })
+        payload = {"action": "update_tone", "preset": body.preset}
+        if settings_service is not None:
+            return await settings_service.handle_settings(payload)
+        return await router._handle_settings(payload)
 
     @app.post("/settings/reset")
     async def reset_settings(_auth: bool = auth):
-        if router is None:
+        if router is None and settings_service is None:
             return JSONResponse(
-                {"type": "error", "payload": {"message": "Router not initialized"}},
+                {"type": "error", "payload": {"message": "Settings service not initialized"}},
                 status_code=503,
             )
+        if settings_service is not None:
+            return await settings_service.handle_settings({"action": "reset"})
         return await router._handle_settings({"action": "reset"})
 
     # ── Stats (deprecated) ─────────────────────────────────────────
