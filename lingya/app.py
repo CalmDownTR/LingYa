@@ -73,6 +73,7 @@ class ApplicationBuilder:
         self._mind_config = mind_config
         self._db: Database | None = None
         self._model: BaseChatModel | None = None
+        self._aux_model: BaseChatModel | None = None
         self._memory: EnhancedMemoryStore | None = None
         self._engine: MindEngine | None = None
         self._static_prompt: str = ""
@@ -96,6 +97,15 @@ class ApplicationBuilder:
             fallbacks=self._config.llm.fallbacks,
         )
         self._model.profile = {"max_input_tokens": self._config.llm.max_input_tokens}
+
+        # Auxiliary model for MindEngine (OCC/IPC/importance/reflection).
+        # No fallbacks — callers have neutral defaults on timeout/error.
+        if self._config.llm.auxiliary_model:
+            self._aux_model = LiteLLMModel(
+                model=self._config.llm.auxiliary_model,
+                temperature=self._config.llm.temperature,
+                max_tokens=self._config.llm.max_tokens,
+            )
         return self
 
     def with_memory(self) -> Self:
@@ -117,8 +127,13 @@ class ApplicationBuilder:
                 "ApplicationBuilder.with_engine() requires with_memory() first"
             )
 
+        # Use auxiliary model if configured, otherwise fall back to main model.
+        # MindEngine callers (OCC+IPC, importance, reflection) all have
+        # neutral defaults on timeout/error — no need for fallbacks here.
+        engine_model = self._aux_model if self._aux_model is not None else self._model
+
         async def llm_call(prompt: str) -> str:
-            result = await self._model.ainvoke([HumanMessage(content=prompt)])
+            result = await engine_model.ainvoke([HumanMessage(content=prompt)])
             return str(result.content) if hasattr(result, "content") else str(result)
 
         self._engine = MindEngine(

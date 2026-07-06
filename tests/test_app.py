@@ -154,3 +154,77 @@ class TestApplicationBuilderIntegration:
         assert app.static_prompt != ""
 
         await app.teardown()
+
+
+class TestAuxiliaryModel:
+    """Verify auxiliary_model routing in ApplicationBuilder."""
+
+    def test_auxiliary_model_created_when_configured(self, test_config, test_mind_config):
+        """When auxiliary_model is set, a second LiteLLMModel is created."""
+        from lingya.app import ApplicationBuilder
+
+        test_config.llm.auxiliary_model = "deepseek/deepseek-v4-flash"
+
+        builder = ApplicationBuilder(test_config, test_mind_config)
+        builder.with_model()
+
+        assert builder._model is not None
+        assert builder._aux_model is not None
+        assert builder._aux_model.model == "deepseek/deepseek-v4-flash"
+        # Aux model should NOT have fallbacks
+        assert builder._aux_model.fallbacks == []
+
+    def test_auxiliary_model_none_when_not_configured(self, test_config, test_mind_config):
+        """Without auxiliary_model, _aux_model should be None."""
+        from lingya.app import ApplicationBuilder
+
+        test_config.llm.auxiliary_model = None
+
+        builder = ApplicationBuilder(test_config, test_mind_config)
+        builder.with_model()
+
+        assert builder._model is not None
+        assert builder._aux_model is None
+
+    @pytest.mark.asyncio
+    async def test_engine_uses_aux_model_when_configured(self, test_config, test_mind_config, tmp_path):
+        """MindEngine llm_call should use auxiliary model when configured."""
+        from lingya.app import ApplicationBuilder
+
+        test_config.db_path = str(tmp_path / "test.db")
+        test_config.memory_path = str(tmp_path / "memory")
+        test_config.llm.auxiliary_model = "cheap/model"
+
+        builder = ApplicationBuilder(test_config, test_mind_config)
+        builder.with_database()
+        builder.with_model()  # creates real _model + _aux_model LiteLLMModel
+        builder.with_memory()
+
+        # Replace models with mocks so we can track which one is called.
+        # Must be done BEFORE with_engine() — the llm_call closure captures
+        # the reference at engine construction time.
+        aux_mock = MagicMock()
+        aux_mock.ainvoke = AsyncMock(return_value=MagicMock(content="aux ok"))
+        main_mock = MagicMock()
+        main_mock.ainvoke = AsyncMock(return_value=MagicMock(content="main ok"))
+        builder._aux_model = aux_mock
+        builder._model = main_mock
+
+        builder.with_engine()
+        app = await builder.build()
+
+        # Trigger engine process_event — it calls llm_call internally
+        # (via occ_ipc_process), which should use the aux model
+        await app.engine.process_event({
+            "event_type": "outcome",
+            "valence": "positive",
+            "focus": "self",
+            "description": "test event",
+        })
+
+        # Verify aux model was used for the engine's llm_call
+        assert aux_mock.ainvoke.call_count > 0
+        # Main model should NOT have been called via engine's llm_call
+        assert main_mock.ainvoke.call_count == 0
+
+        await app.teardown()
