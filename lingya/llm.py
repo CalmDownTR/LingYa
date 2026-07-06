@@ -75,6 +75,7 @@ class LiteLLMModel(BaseChatModel):
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             stop=stop,
+            num_retries=2,
             **kwargs,
         )
         choice = response.choices[0]
@@ -101,6 +102,7 @@ class LiteLLMModel(BaseChatModel):
             max_tokens=self.max_tokens,
             stop=stop,
             stream=True,
+            num_retries=2,
             **kwargs,
         )
         for chunk in response:
