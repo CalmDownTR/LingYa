@@ -288,7 +288,11 @@ class MindEngine:
         ).strip()
 
     async def check_response_alignment(self, response_text: str) -> bool:
-        """Check if the response aligns with identity. Triggers reanchor if needed."""
+        """Check if the response aligns with identity. Triggers reanchor if needed.
+
+        @incomplete: reanchor_hint 尚未注入后续 prompt（v1.0 演化可审查）。
+        reanchor_needed/reanchor_hint 字段被设置但从未被任何代码读取。
+        """
         if self._embedding_fn is None:
             return True
 

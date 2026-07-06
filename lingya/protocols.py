@@ -2,8 +2,6 @@
 
 IMemoryStore: interface that EnhancedMemoryStore implements, used by
   MindEngine, MessageRouter, reflection, and memory tools.
-
-ILLMBackend: interface for LLM models, enabling future multi-model failover.
 """
 
 from __future__ import annotations
@@ -53,10 +51,3 @@ class IMemoryStore(Protocol):
     def apply_decay(self) -> int: ...
 
     def get_cumulative_importance(self) -> float: ...
-
-
-@runtime_checkable
-class ILLMBackend(Protocol):
-    """LLM backend interface for future multi-model failover."""
-
-    async def ainvoke(self, messages: list[Any]) -> Any: ...

@@ -152,6 +152,8 @@ class BackgroundRunner:
         TODO: read conversation history from LangGraph checkpoint and
         pass it to generate_diary().
         """
-        logger.debug(
-            "Diary generation not yet implemented — no transcript source wired"
-        )
+        if not getattr(self, "_diary_stub_logged", False):
+            logger.warning(
+                "Diary generation not yet implemented — no transcript source wired"
+            )
+            self._diary_stub_logged = True

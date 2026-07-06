@@ -169,13 +169,8 @@ class ApplicationBuilder:
             if self._memory is not None:
                 memory_tools = create_memory_tools(self._memory)
 
-            # MCP tools stub
+            # MCP tools: not yet wired (see v2.0 Plugin system)
             mcp_tools: list = []
-            try:
-                import langchain_mcp_adapters.client  # noqa: F401
-                pass
-            except Exception:
-                pass
 
             backend = StateBackend()
             self._agent = create_deep_agent(

@@ -1,4 +1,4 @@
-"""Tests for lingya.protocols — IMemoryStore and ILLMBackend."""
+"""Tests for lingya.protocols — IMemoryStore."""
 
 from __future__ import annotations
 
@@ -97,29 +97,3 @@ class TestIMemoryStore:
         assert engine.memory is mock_memory
 
 
-class TestILLMBackend:
-    def test_litellm_passes_isinstance(self):
-        """LiteLLMModel with ainvoke should pass isinstance check."""
-        import os
-
-        from lingya.llm import LiteLLMModel
-        from lingya.protocols import ILLMBackend
-
-        if "DEEPSEEK_API_KEY" not in os.environ:
-            pytest.skip("DEEPSEEK_API_KEY not set")
-
-        model = LiteLLMModel(
-            model="deepseek/deepseek-v4-flash",
-            temperature=0.7,
-        )
-        assert isinstance(model, ILLMBackend)
-
-    def test_mock_passes(self):
-        """A mock with ainvoke should pass isinstance."""
-        from unittest.mock import MagicMock
-
-        from lingya.protocols import ILLMBackend
-
-        mock_llm = MagicMock()
-        mock_llm.ainvoke = MagicMock()
-        assert isinstance(mock_llm, ILLMBackend)

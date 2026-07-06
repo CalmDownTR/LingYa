@@ -21,6 +21,9 @@ MEMORY_DECAYED = "memory_decayed"
 class EventBus:
     """In-process pub/sub event bus.
 
+    @reserved: v0.10 Dreaming 将添加 mind_state_changed 消费者。
+    当前只有 MindEngine.process_event 发布事件，无订阅方。
+
     Usage::
 
         bus = EventBus()
