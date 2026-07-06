@@ -46,3 +46,4 @@ web/dist/
 # Environment (secrets)
 .env
 agent_config.yaml
+uv.lock
