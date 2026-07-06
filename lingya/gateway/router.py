@@ -739,10 +739,11 @@ class MessageRouter:
                         "payload": inner_event["payload"],
                     }
 
-            # Wait for engine with brief grace period — it's likely already
-            # done since streaming takes longer than the 1.5s LLM timeout.
+            # Wait for engine — process_event does OCC+IPC LLM call
+            # (affect.py:_OCC_IPC_TIMEOUT=1.5s) + DB save + event publish.
+            # 2.0s gives the LLM call full headroom + 0.5s for persistence.
             try:
-                await asyncio.wait_for(engine_task, timeout=0.5)
+                await asyncio.wait_for(engine_task, timeout=2.0)
             except asyncio.TimeoutError:
                 pass
             engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
