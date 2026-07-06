@@ -181,3 +181,69 @@ class TestToLitellmMessages:
         assert result[1]["content"] == ""
         assert result[1]["tool_calls"][0]["name"] == "search"
         assert result[2] == {"role": "tool", "content": "found it", "tool_call_id": "c1"}
+
+
+class TestFallbacks:
+    """Verify fallbacks parameter forwarding to litellm.completion."""
+
+    def test_fallbacks_passed_to_generate(self):
+        """When model has fallbacks, they should be passed to litellm.completion."""
+        from unittest.mock import patch, MagicMock
+
+        from lingya.llm import LiteLLMModel
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Hello"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        with patch("litellm.completion", return_value=mock_response) as m:
+            model = LiteLLMModel(
+                model="test/model",
+                fallbacks=["openai/gpt-4o", "anthropic/claude-sonnet-4"],
+            )
+            model._generate([HumanMessage(content="hi")])
+
+            call_kwargs = m.call_args.kwargs
+            assert "fallbacks" in call_kwargs
+            assert call_kwargs["fallbacks"] == ["openai/gpt-4o", "anthropic/claude-sonnet-4"]
+
+    def test_no_fallbacks_when_empty(self):
+        """Without fallbacks configured, none should be passed."""
+        from unittest.mock import patch, MagicMock
+
+        from lingya.llm import LiteLLMModel
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Hello"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        with patch("litellm.completion", return_value=mock_response) as m:
+            model = LiteLLMModel(model="test/model", fallbacks=[])
+            model._generate([HumanMessage(content="hi")])
+
+            call_kwargs = m.call_args.kwargs
+            assert "fallbacks" not in call_kwargs
+
+    def test_setdefault_does_not_override_kwargs_fallbacks(self):
+        """If kwargs already has fallbacks, model fallbacks should not override."""
+        from unittest.mock import patch, MagicMock
+
+        from lingya.llm import LiteLLMModel
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Hello"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        with patch("litellm.completion", return_value=mock_response) as m:
+            model = LiteLLMModel(model="test/model", fallbacks=["backup/model"])
+            model._generate(
+                [HumanMessage(content="hi")],
+                fallbacks=["explicit/fallback"],
+            )
+
+            call_kwargs = m.call_args.kwargs
+            # kwargs-supplied fallbacks take precedence via setdefault
+            assert call_kwargs["fallbacks"] == ["explicit/fallback"]

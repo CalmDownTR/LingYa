@@ -11,7 +11,9 @@ class LLMConfig(BaseModel):
     model: str = "deepseek/deepseek-v4-flash"
     temperature: float = 0.7
     max_tokens: int = 32768
-    max_input_tokens: int = 1_048_576  # DeepSeek V4 Flash 1M context window, for summarization thresholds
+    max_input_tokens: int = 1_048_576
+    fallbacks: list[str] = []  # Backup models in priority order, e.g. ["openai/gpt-4o"]
+    auxiliary_model: str | None = None  # Optional cheaper model for MindEngine OCC/IPC/reflection
 
 
 class OtelConfig(BaseModel):

@@ -93,6 +93,7 @@ class ApplicationBuilder:
             model=self._config.llm.model,
             temperature=self._config.llm.temperature,
             max_tokens=self._config.llm.max_tokens,
+            fallbacks=self._config.llm.fallbacks,
         )
         self._model.profile = {"max_input_tokens": self._config.llm.max_input_tokens}
         return self

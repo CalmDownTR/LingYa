@@ -32,6 +32,7 @@ class LiteLLMModel(BaseChatModel):
     model: str = Field(default="deepseek/deepseek-v4-flash")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=32768, gt=0)
+    fallbacks: list[str] = Field(default_factory=list)
 
     # Allow extra fields set by ApplicationBuilder (e.g. "profile")
     model_config = {"extra": "allow"}
@@ -98,6 +99,11 @@ class LiteLLMModel(BaseChatModel):
             tool_choice = getattr(self, "_bound_tools_kwargs", {}).get("tool_choice", "auto")
             kwargs.setdefault("tool_choice", tool_choice)
 
+        # Forward fallbacks — litellm.completion natively supports
+        # fallbacks=[...] and will try them in order on failure.
+        if self.fallbacks:
+            kwargs.setdefault("fallbacks", self.fallbacks)
+
         response = litellm.completion(
             model=self.model,
             messages=litellm_messages,
@@ -134,6 +140,11 @@ class LiteLLMModel(BaseChatModel):
             kwargs.setdefault("tools", openai_tools)
             tool_choice = getattr(self, "_bound_tools_kwargs", {}).get("tool_choice", "auto")
             kwargs.setdefault("tool_choice", tool_choice)
+
+        # Forward fallbacks — litellm.completion natively supports
+        # fallbacks=[...] and will try them in order on failure.
+        if self.fallbacks:
+            kwargs.setdefault("fallbacks", self.fallbacks)
 
         response = litellm.completion(
             model=self.model,
