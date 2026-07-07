@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -221,6 +222,86 @@ def status(pid_file: str = DEFAULT_PID_FILE, port: int = DEFAULT_PORT) -> None:
     print("LingYa is not running.")
     print(f"  Start with: python main.py")
     print(f"  Web UI will be at: http://localhost:{port}")
+
+
+# ── Background (detach) ───────────────────────────────────────────────────
+
+
+def start_detached() -> None:
+    """Start LingYa daemon in background via subprocess.Popen.
+
+    The child process runs ``daemon_main()`` (the same foreground code path)
+    in its own session group, detached from the terminal. stdout/stderr are
+    redirected to ``{data_dir}/logs/lingya.log`` (append mode).
+
+    Per ADR-011: Popen is a transitional convenience for development. Long-term
+    process supervision (crash recovery, auto-start) comes via launchd/systemd
+    in Phase 2 (``lingya install``).
+    """
+    from lingya.config import load_config
+    from lingya.gateway.daemon import GatewayDaemon
+
+    # 0. Double-start guard
+    if GatewayDaemon.is_running(DEFAULT_PID_FILE):
+        pid = _get_pid_from_file(DEFAULT_PID_FILE)
+        print(f"LingYa is already running (PID {pid}).")
+        print("  Use 'lingya stop' first, or 'lingya status' to check.")
+        sys.exit(0)
+
+    # Clean stale PID file if present
+    stale_path = Path(DEFAULT_PID_FILE)
+    if stale_path.exists():
+        stale_path.unlink(missing_ok=True)
+
+    # 1. Resolve config → derive log path
+    config = load_config()
+    log_path = Path(config.data_dir) / "logs" / "lingya.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fp = open(log_path, "a")
+
+    # 2. Popen child: same Python interpreter, new session, stderr → stdout
+    main_path = Path(__file__).resolve()
+    child = subprocess.Popen(
+        [sys.executable, main_path.as_posix()],
+        stdout=log_fp,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+
+    # 3. Readiness wait — poll PID file + child alive (max 10 s)
+    for _ in range(50):  # 50 × 0.2 s = 10 s
+        pid = _get_pid_from_file(DEFAULT_PID_FILE)
+        if pid is not None:
+            log_fp.close()
+            print(f"LingYa daemon started (PID: {pid}, port: {DEFAULT_PORT})")
+            print(f"Web UI available at http://localhost:{DEFAULT_PORT}")
+            return
+
+        if child.poll() is not None:
+            log_fp.close()
+            tail = read_log_tail(log_path, 20)
+            print("Failed to start daemon.")
+            if tail:
+                print(tail)
+            print(f"Check logs: {log_path}")
+            sys.exit(1)
+
+        time.sleep(0.2)
+
+    # Timeout
+    log_fp.close()
+    print(f"Daemon did not start within 10 seconds. Check logs: {log_path}")
+    sys.exit(1)
+
+
+def read_log_tail(log_path: Path, n: int = 20) -> str:
+    """Read last *n* lines from *log_path*. Returns "" if file is missing."""
+    if not log_path.exists():
+        return ""
+    with open(log_path, "r") as f:
+        lines = f.readlines()
+    return "".join(lines[-n:])
 
 
 # ── CLI entry point ─────────────────────────────────────────────────────

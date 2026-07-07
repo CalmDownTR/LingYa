@@ -159,7 +159,10 @@ class GatewayDaemon:
 
         # 5. Wait for shutdown signal
         loop = asyncio.get_event_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
+        # SIGHUP = shutdown (not reload). LingYa is a single-user persistent
+        # agent — terminal close means "user left, save and exit." Hot-reload
+        # goes through dedicated commands or API, not SIGHUP.
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             try:
                 loop.add_signal_handler(sig, self._shutdown_event.set)
             except NotImplementedError:

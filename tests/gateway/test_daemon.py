@@ -308,3 +308,67 @@ class TestPidFileLifecycle:
 
             daemon._shutdown_event.set()
             await asyncio.wait_for(daemon_task, timeout=2.0)
+
+
+# ── Signal handler tests ─────────────────────────────────────────────
+
+
+class TestSignalHandlers:
+    def test_sighup_in_signal_registration(self, daemon):
+        """Verify signal.SIGHUP is registered alongside SIGTERM and SIGINT."""
+        import signal
+
+        mock_loop = MagicMock()
+        registered_signals: list[int] = []
+
+        def capture_add_signal_handler(sig, callback):
+            registered_signals.append(sig)
+
+        mock_loop.add_signal_handler = capture_add_signal_handler
+
+        mock_app = _make_mock_app()
+        # Set shutdown event before running so start() doesn't block forever
+        daemon._shutdown_event.set()
+
+        mock_uvicorn = MagicMock()
+        mock_uvicorn.should_exit = False
+
+        async def tracking_server_serve():
+            """Block until should_exit, just like real uvicorn."""
+            while not mock_uvicorn.should_exit:
+                await asyncio.sleep(0.01)
+
+        mock_uvicorn.serve = tracking_server_serve
+
+        mock_bg_runner = MagicMock()
+        mock_bg_runner.start = AsyncMock()
+        mock_bg_runner.stop = AsyncMock()
+
+        with patch("asyncio.get_event_loop", return_value=mock_loop), \
+             patch("lingya.app.ApplicationBuilder") as MockBuilder, \
+             patch("lingya.gateway.router.MessageRouter"), \
+             patch("lingya.gateway.server.create_app"), \
+             patch("lingya.gateway.daemon.uvicorn.Server", return_value=mock_uvicorn), \
+             patch("lingya.gateway.daemon.uvicorn.Config"), \
+             patch("lingya.gateway.daemon.BackgroundRunner", return_value=mock_bg_runner), \
+             patch("builtins.print"):
+            builder = MockBuilder.return_value
+            builder.with_database.return_value = builder
+            builder.with_model.return_value = builder
+            builder.with_memory.return_value = builder
+            builder.with_event_bus.return_value = builder
+            builder.with_engine.return_value = builder
+            builder.with_agent.return_value = builder
+            builder.build = AsyncMock(return_value=mock_app)
+
+            async def _run():
+                await daemon.start()
+
+            asyncio.run(_run())
+
+        assert signal.SIGHUP in registered_signals, (
+            f"Expected SIGHUP ({signal.SIGHUP}) in registered signals, "
+            f"got {registered_signals}"
+        )
+        assert signal.SIGTERM in registered_signals
+        assert signal.SIGINT in registered_signals

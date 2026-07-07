@@ -2,9 +2,10 @@
 
 Usage::
 
-    lingya start       Start daemon in foreground
-    lingya stop        Gracefully stop a running daemon
-    lingya status      Show daemon status
+    lingya start          Start daemon in foreground
+    lingya start -d       Start daemon in background (detach from terminal)
+    lingya stop           Gracefully stop a running daemon
+    lingya status         Show daemon status
 """
 
 from __future__ import annotations
@@ -27,7 +28,12 @@ def main() -> None:
     )
     sub = parser.add_subparsers(dest="command", title="commands")
 
-    sub.add_parser("start", help="Start daemon in foreground (Ctrl+C to stop)")
+    start_parser = sub.add_parser("start", help="Start daemon in foreground (Ctrl+C to stop)")
+    start_parser.add_argument(
+        "-d", "--detach",
+        action="store_true",
+        help="Start daemon in background (detach from terminal)",
+    )
     sub.add_parser("stop", help="Gracefully stop a running daemon")
     sub.add_parser("status", help="Show daemon running status")
 
@@ -38,9 +44,14 @@ def main() -> None:
         sys.exit(1)
 
     if args.command == "start":
-        from main import daemon_main
+        if args.detach:
+            from main import start_detached
 
-        asyncio.run(daemon_main())
+            start_detached()
+        else:
+            from main import daemon_main
+
+            asyncio.run(daemon_main())
 
     elif args.command == "stop":
         from main import stop_daemon
