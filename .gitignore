@@ -24,6 +24,9 @@ product/
 .github/
 skills-lock.json
 
+# Plugins
+.understand-anything/
+
 # CodeGraph (machine-specific index)
 .codegraph/
 
