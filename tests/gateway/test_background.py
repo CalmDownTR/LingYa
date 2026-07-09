@@ -12,7 +12,7 @@ import pytest
 
 @pytest.fixture
 def mock_engine():
-    """Mock MindEngine with idle_tick and proper config."""
+    """Mock MindEngine with idle_tick, get_recent_transcript, and proper config."""
     from lingya.mind.config import (
         BigFiveTraits,
         IdentityAnchor,
@@ -23,6 +23,7 @@ def mock_engine():
 
     engine = MagicMock()
     engine.idle_tick = AsyncMock()
+    engine.get_recent_transcript = MagicMock(return_value="TR: Hello\nLingYa: Hi there!")
     engine.state = MagicMock()
     engine.state.current_pad = MagicMock()
     engine.state.current_pad.pleasure = 0.0
@@ -223,9 +224,13 @@ class TestHeartbeatLoop:
 
 class TestDiaryScheduler:
     @pytest.mark.asyncio
-    async def test_try_generate_diary_is_stub(self, mock_engine, mock_model, tmp_data_dir):
-        """_try_generate_diary is a stub — does not raise, does not call model."""
+    async def test_try_generate_diary_calls_model_and_saves(
+        self, mock_engine, mock_model, tmp_data_dir
+    ):
+        """v0.9.9: _try_generate_diary generates a diary via LLM and saves it."""
         from lingya.gateway.background import BackgroundRunner
+
+        mock_model.ainvoke.return_value.text = "一篇测试日记内容。"
 
         runner = BackgroundRunner(
             engine=mock_engine,
@@ -233,11 +238,63 @@ class TestDiaryScheduler:
             data_dir=tmp_data_dir,
         )
 
-        # Should not raise — stub just logs
+        # Should not raise
         await runner._try_generate_diary()
 
-        # Stub does not call model
+        # Should have called the engine for transcript
+        mock_engine.get_recent_transcript.assert_called_once()
+
+        # Should have called model to generate the diary
+        mock_model.ainvoke.assert_called_once()
+
+        # Check diary file was created
+        from datetime import date
+        diary_path = Path(tmp_data_dir) / "diary" / f"{date.today().isoformat()}.md"
+        assert diary_path.exists(), f"Diary file not found at {diary_path}"
+        content = diary_path.read_text(encoding="utf-8")
+        assert "一篇测试日记内容" in content
+
+    @pytest.mark.asyncio
+    async def test_try_generate_diary_skips_when_already_generated_today(
+        self, mock_engine, mock_model, tmp_data_dir
+    ):
+        """When today's diary already exists, generation is skipped."""
+        from datetime import date
+        from lingya.gateway.background import BackgroundRunner
+
+        # Pre-create today's diary
+        diary_dir = Path(tmp_data_dir) / "diary"
+        today_file = diary_dir / f"{date.today().isoformat()}.md"
+        today_file.write_text("# Today\n\nAlready written.\n", encoding="utf-8")
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+        )
+
+        await runner._try_generate_diary()
+
+        # Model should NOT be called since diary already exists for today
         mock_model.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_try_generate_diary_handles_llm_error(
+        self, mock_engine, mock_model, tmp_data_dir
+    ):
+        """When LLM fails, _try_generate_diary logs error and does not crash."""
+        from lingya.gateway.background import BackgroundRunner
+
+        mock_model.ainvoke.side_effect = RuntimeError("LLM timeout")
+
+        runner = BackgroundRunner(
+            engine=mock_engine,
+            model=mock_model,
+            data_dir=tmp_data_dir,
+        )
+
+        # Should not raise
+        await runner._try_generate_diary()
 
 
 # ── Memory Decay Loop tests ───────────────────────────────────────────

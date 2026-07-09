@@ -360,6 +360,569 @@ class TestReflectionFailureRollback:
         )
 
 
+class TestIdentityGuardReanchor:
+    """Tests for identity guard reanchor hint injection (v0.9.9 #1)."""
+
+    async def test_prompt_fragment_injects_reanchor_hint_when_needed(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """When reanchor_needed=True, get_prompt_fragment() must include the hint."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.state.reanchor_needed = True
+        engine.state.reanchor_hint = "Remember: you are a test assistant, stay aligned."
+
+        fragment = engine.get_prompt_fragment()
+
+        assert "Remember: you are a test assistant" in fragment
+        assert "身份重锚" in fragment or "reanchor" in fragment.lower()
+
+    async def test_reanchor_flag_cleared_after_injection(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """After get_prompt_fragment() injects the hint, reanchor_needed must be cleared."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.state.reanchor_needed = True
+        engine.state.reanchor_hint = "Reanchor test hint."
+
+        engine.get_prompt_fragment()
+
+        assert engine.state.reanchor_needed is False, (
+            "reanchor_needed should be cleared after one-time injection"
+        )
+
+    async def test_prompt_fragment_no_reanchor_when_not_needed(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """When reanchor_needed=False, prompt should NOT contain reanchor hint."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.state.reanchor_needed = False
+        engine.state.reanchor_hint = "Should not appear."
+
+        fragment = engine.get_prompt_fragment()
+
+        assert "Should not appear" not in fragment
+
+    async def test_check_response_alignment_detects_drift(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """check_response_alignment should return False when response drifts from identity."""
+        from lingya.mind import MindEngine
+
+        identity_text = mind_config.identity.identity
+
+        # Mock embedding that returns orthogonal vectors (cosine similarity ~0)
+        # Identity gets [1,0,0], anything else gets [0,1,0] → orthogonal → drift
+        def mock_embedding(text: str) -> list[float]:
+            if text == identity_text:
+                return [1.0, 0.0, 0.0]
+            return [0.0, 1.0, 0.0]  # Orthogonal → low similarity → drift detected
+
+        async def reanchor_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "safety guard" in prompt or "re-anchoring" in prompt:
+                return "Remember your identity as a test assistant."
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=reanchor_llm,
+            embedding_fn=mock_embedding,
+        )
+
+        # Response text different from identity → orthogonal embedding → drift detected
+        result = await engine.check_response_alignment("I am a completely different entity.")
+
+        assert result is False, "Should detect drift when response is far from identity"
+        assert engine.state.reanchor_needed is True
+        assert len(engine.state.reanchor_hint) > 0
+
+    async def test_check_response_alignment_no_drift(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """check_response_alignment should return True when response is aligned."""
+        from lingya.mind import MindEngine
+
+        # Mock embedding that returns same vector (cosine similarity = 1.0)
+        def mock_embedding(text: str) -> list[float]:
+            return [1.0, 0.0, 0.0]  # Always identical → high similarity
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+            embedding_fn=mock_embedding,
+        )
+
+        engine.state.reanchor_needed = False
+        result = await engine.check_response_alignment("Any response text.")
+
+        assert result is True, "Should not detect drift when embeddings are identical"
+
+    async def test_check_response_alignment_returns_true_without_embedding_fn(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """Without embedding_fn, check_response_alignment should always return True."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+            embedding_fn=None,
+        )
+
+        result = await engine.check_response_alignment("Any text.")
+        assert result is True
+
+    async def test_consecutive_reanchor_warning(
+        self, mind_config, mock_llm, mock_memory, caplog
+    ):
+        """3 consecutive reanchor failures should log a warning."""
+        from lingya.mind import MindEngine
+        import logging
+
+        identity_text = mind_config.identity.identity
+
+        # Mock embedding that always detects drift
+        def mock_embedding(text: str) -> list[float]:
+            if text == identity_text:
+                return [1.0, 0.0, 0.0]
+            return [0.0, 1.0, 0.0]  # Orthogonal → drift
+
+        async def reanchor_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "safety guard" in prompt or "re-anchoring" in prompt:
+                return "Reanchor hint."
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=reanchor_llm,
+            embedding_fn=mock_embedding,
+        )
+
+        caplog.set_level(logging.WARNING)
+
+        # 3 consecutive drift detections
+        for _ in range(3):
+            await engine.check_response_alignment("Drifted response.")
+
+        # Should have logged a warning about 3 consecutive reanchor failures
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        reanchor_warnings = [r for r in warnings if "reanchor" in r.message.lower()]
+        assert len(reanchor_warnings) >= 1, (
+            f"Expected at least 1 reanchor warning after 3 consecutive failures, "
+            f"got {len(reanchor_warnings)} warnings: {[r.message for r in warnings]}"
+        )
+
+    async def test_successful_alignment_resets_reanchor_counter(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """A successful alignment check should reset the consecutive failure counter."""
+        from lingya.mind import MindEngine
+
+        identity_text = mind_config.identity.identity
+        call_count = 0
+
+        def mock_embedding(text: str) -> list[float]:
+            nonlocal call_count
+            # First 2 calls: drift (orthogonal vectors)
+            # 3rd call: aligned (same vector)
+            if text == identity_text:
+                return [1.0, 0.0, 0.0]
+            call_count += 1
+            if call_count <= 2:
+                return [0.0, 1.0, 0.0]  # Orthogonal → drift
+            return [1.0, 0.0, 0.0]  # Same → aligned
+
+        async def reanchor_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "safety guard" in prompt or "re-anchoring" in prompt:
+                return "Reanchor hint."
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=reanchor_llm,
+            embedding_fn=mock_embedding,
+        )
+
+        # 2 drifts
+        await engine.check_response_alignment("Drift 1")
+        await engine.check_response_alignment("Drift 2")
+        assert engine._reanchor_failure_count == 2
+
+        # 1 successful alignment → counter resets
+        await engine.check_response_alignment("Aligned response.")
+        assert engine._reanchor_failure_count == 0, (
+            f"Counter should reset after successful alignment, got {engine._reanchor_failure_count}"
+        )
+
+
+class TestConversationRecording:
+    """Tests for conversation turn recording + transcript generation (v0.9.9 #2)."""
+
+    async def test_record_conversation_turn_stores_turn(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """record_conversation_turn should store user + assistant messages."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.record_conversation_turn("Hello", "Hi there!")
+        engine.record_conversation_turn("How are you?", "I'm good, thanks.")
+
+        assert len(engine._recent_turns) == 2
+        assert engine._recent_turns[0]["user"] == "Hello"
+        assert engine._recent_turns[0]["assistant"] == "Hi there!"
+        assert "timestamp" in engine._recent_turns[0]
+
+    async def test_recent_turns_capped_at_500(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """The conversation ring buffer should cap at 500 turns."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        for i in range(600):
+            engine.record_conversation_turn(f"User {i}", f"Assistant {i}")
+
+        assert len(engine._recent_turns) == 500
+        # Should keep the most recent
+        assert engine._recent_turns[0]["user"] == "User 100"
+        assert engine._recent_turns[-1]["user"] == "User 599"
+
+    async def test_get_recent_transcript_formats_turns(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """get_recent_transcript should format turns as readable transcript."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.record_conversation_turn("你好", "你好！")
+        engine.record_conversation_turn("今天天气不错", "是的，很适合出去走走。")
+
+        transcript = engine.get_recent_transcript(hours=24)
+
+        assert "TR:" in transcript or "用户:" in transcript
+        assert "LingYa:" in transcript or "灵芽:" in transcript
+        assert "你好" in transcript
+        assert "今天天气不错" in transcript
+
+    async def test_get_recent_transcript_empty_returns_message(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """When no turns are recorded, get_recent_transcript returns a placeholder."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+
+        transcript = engine.get_recent_transcript(hours=24)
+
+        assert len(transcript) > 0
+        assert "无" in transcript or "没有" in transcript or "No" in transcript
+
+
+class TestOceanDriftDamping:
+    """Tests for OCEAN drift damping (v0.9.9 #3)."""
+
+    async def test_original_ocean_snapshot_on_first_boot(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """MindState.from_config must snapshot original_ocean from config."""
+        from lingya.mind import MindEngine, MindState
+
+        state = MindState.from_config(mind_config)
+        assert state.original_ocean is not None, (
+            "original_ocean must be set on first boot"
+        )
+        assert state.original_ocean.openness == mind_config.ocean.openness
+        assert state.original_ocean.conscientiousness == mind_config.ocean.conscientiousness
+
+    async def test_ocean_drift_regression_force(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """ocean_drift with original_ocean should pull toward original values."""
+        from lingya.mind.affect import ocean_drift
+        from lingya.mind.config import BigFiveTraits
+        from lingya.mind.state import PADPoint
+
+        original = BigFiveTraits(
+            openness=0.5, conscientiousness=0.5, extraversion=0.5,
+            agreeableness=0.5, neuroticism=0.5,
+        )
+        # Current ocean has drifted far from original
+        drifted = BigFiveTraits(
+            openness=0.8, conscientiousness=0.8, extraversion=0.8,
+            agreeableness=0.2, neuroticism=0.2,
+        )
+
+        # Create pad_history with extreme positive PAD (drives further from original)
+        pad_history = [PADPoint(pleasure=0.9, arousal=0.5, dominance=0.9)] * 50
+
+        # With regression force
+        result_with_regression = ocean_drift(
+            drifted, pad_history, original_ocean=original, epsilon=0.01,
+        )
+
+        # Without regression force
+        result_without_regression = ocean_drift(
+            drifted, pad_history, original_ocean=None, epsilon=0.01,
+        )
+
+        # The regression version should stay closer to original values
+        # For openness: without regression goes higher (positive PAD), with regression less so
+        assert result_with_regression.openness <= result_without_regression.openness, (
+            "Regression force should dampen drift toward extremes"
+        )
+
+    async def test_ocean_drift_regression_is_weaker_than_event_drive(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """Regression force must be far smaller than event-driven force."""
+        from lingya.mind.affect import ocean_drift
+        from lingya.mind.config import BigFiveTraits
+        from lingya.mind.state import PADPoint
+
+        original = BigFiveTraits()
+        current = BigFiveTraits(openness=0.3, extraversion=0.3)  # Below original
+
+        # PAD history that drives openness UP (positive pleasure → positive drift)
+        pad_history = [PADPoint(pleasure=0.9, arousal=0.0, dominance=0.0)] * 50
+
+        # With strong event drive, the net drift should still be able to move away from original
+        # even with regression — just more slowly
+        result = ocean_drift(
+            current, pad_history, original_ocean=original, epsilon=0.05,
+        )
+
+        # Event drive should still dominate — openness should increase from 0.3
+        # even though regression pulls back toward 0.5
+        assert result.openness > 0.3, (
+            f"Event drive should still move OCEAN, got openness={result.openness}"
+        )
+
+    async def test_ocean_drift_backward_compat_no_original(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """When original_ocean is None, ocean_drift must behave exactly as before."""
+        from lingya.mind.affect import ocean_drift
+        from lingya.mind.config import BigFiveTraits
+        from lingya.mind.state import PADPoint
+
+        ocean = BigFiveTraits()
+        pad_history = [PADPoint(pleasure=0.5, arousal=0.0, dominance=0.0)] * 30
+
+        result = ocean_drift(ocean, pad_history, original_ocean=None)
+        # Should not crash, should return valid BigFiveTraits
+        assert 0.0 <= result.openness <= 1.0
+        assert 0.0 <= result.extraversion <= 1.0
+
+
+class TestToneMatrixEvolution:
+    """Tests for tone_matrix evolution (v0.9.9 #4)."""
+
+    async def test_tone_matrix_has_original_reference(
+        self, mind_config, mock_llm, mock_memory
+    ):
+        """Engine must track original tone_matrix for cap enforcement."""
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+
+        assert engine._original_tone_matrix is not None
+        assert engine._original_tone_matrix.warmth == mind_config.tone_matrix.warmth
+        assert engine._original_tone_matrix.formality == mind_config.tone_matrix.formality
+
+    async def test_tone_evolution_stays_within_cap(
+        self, mind_config, mock_memory
+    ):
+        """After many events, tone warmth/formality must stay within ±20% of original."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "5.0"
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        original_warmth = engine._original_tone_matrix.warmth
+        original_formality = engine._original_tone_matrix.formality
+
+        # Process 100 events to trigger multiple tone evolution cycles
+        for i in range(100):
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive" if i % 3 != 0 else "negative",
+                "focus": "self",
+                "description": f"Tone evolution test {i}",
+            })
+
+        current_warmth = engine.config.tone_matrix.warmth
+        current_formality = engine.config.tone_matrix.formality
+
+        # Must stay within ±20% of original
+        warmth_min = max(0, int(original_warmth * 0.8))
+        warmth_max = min(100, int(original_warmth * 1.2))
+        formality_min = max(0, int(original_formality * 0.8))
+        formality_max = min(100, int(original_formality * 1.2))
+
+        assert warmth_min <= current_warmth <= warmth_max, (
+            f"Warmth {current_warmth} outside cap [{warmth_min}, {warmth_max}]"
+        )
+        assert formality_min <= current_formality <= formality_max, (
+            f"Formality {current_formality} outside cap [{formality_min}, {formality_max}]"
+        )
+
+    async def test_tone_evolution_humor_is_fixed(
+        self, mind_config, mock_memory
+    ):
+        """Humor should NOT evolve — only warmth and formality change."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "5.0"
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        original_humor = engine.config.tone_matrix.humor
+
+        for _ in range(50):
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": "Humor stability test",
+            })
+
+        # Humor should not have changed
+        assert engine.config.tone_matrix.humor == original_humor, (
+            f"Humor changed from {original_humor} to {engine.config.tone_matrix.humor}"
+        )
+
+    async def test_tone_evolution_rate_is_slow(
+        self, mind_config, mock_memory
+    ):
+        """Tone evolution should be very slow — 1/10 of OCEAN drift rate."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "5.0"
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        initial_warmth = engine.config.tone_matrix.warmth
+        initial_formality = engine.config.tone_matrix.formality
+
+        # 10 events = 1 evolution cycle
+        for _ in range(10):
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": "Rate test",
+            })
+
+        # After just 1 cycle, changes should be tiny (max 1-2 points)
+        warmth_change = abs(engine.config.tone_matrix.warmth - initial_warmth)
+        formality_change = abs(engine.config.tone_matrix.formality - initial_formality)
+
+        assert warmth_change <= 2, (
+            f"Warmth changed by {warmth_change}, expected <= 2 in one cycle"
+        )
+        assert formality_change <= 2, (
+            f"Formality changed by {formality_change}, expected <= 2 in one cycle"
+        )
+
+
 class TestReloadConfig:
     """Tests for MindEngine.reload_config() — hot reload without restart."""
 

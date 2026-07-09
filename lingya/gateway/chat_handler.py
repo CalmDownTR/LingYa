@@ -146,6 +146,14 @@ class ChatHandler:
                     self._engine.check_response_alignment(accumulated_text)
                 )
 
+            # v0.9.9: Record conversation turn for diary generation
+            response_text = (
+                accumulated_text
+                if isinstance(accumulated_text, str)
+                else self._session_service._extract_text_content_from_value(accumulated_text)
+            )
+            self._engine.record_conversation_turn(user_text, response_text)
+
             # Yield mind.transition
             pad = self._engine.state.current_pad
             last_emotion = (
@@ -217,6 +225,9 @@ class ChatHandler:
         engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
         if response_text:
             await self._engine.check_response_alignment(response_text)
+
+        # v0.9.9: Record conversation turn for diary generation
+        self._engine.record_conversation_turn(user_text, response_text)
 
         return {
             "type": "chat_response",

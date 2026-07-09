@@ -24,6 +24,9 @@ class MindState(BaseModel):
     pad_history: list[PADPoint] = Field(default_factory=list)
 
     current_ocean: BigFiveTraits = Field(default_factory=BigFiveTraits)
+    # v0.9.9: Snapshot of OCEAN from config on first boot — used as
+    # an anchor for drift regression. None for pre-v0.9.9 saved states.
+    original_ocean: BigFiveTraits | None = None
 
     recent_emotions: list[dict] = Field(default_factory=list)
 
@@ -53,6 +56,7 @@ class MindState(BaseModel):
                 dominance=baseline.dominance,
             ),
             current_ocean=ocean,
+            original_ocean=config.ocean.model_copy(deep=True),
         )
 
     def to_dict(self) -> dict:

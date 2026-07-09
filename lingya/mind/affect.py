@@ -440,12 +440,18 @@ def ocean_drift(
     epsilon: float = 0.001,
     min_history: int = 20,
     max_step: float = 0.005,
+    original_ocean: BigFiveTraits | None = None,
 ) -> BigFiveTraits:
     """Long-term PAD deviation → tiny OCEAN adjustment.
 
     PAD baseline is derived from OCEAN itself (closed loop). Drift only
     triggers with sufficient history. Epsilon and max_step cap ensure
     personality changes are extremely gradual.
+
+    v0.9.9: When *original_ocean* is provided, a weak regression force
+    pulls each dimension back toward its original value. This prevents
+    unbounded unidirectional drift while remaining far smaller than
+    event-driven forces.
 
     max_step limits the per-cycle absolute change in each OCEAN dimension.
     """
@@ -470,10 +476,33 @@ def ocean_drift(
         clamped_delta = max(-max_step, min(max_step, delta))
         return max(0.0, min(1.0, current + clamped_delta))
 
+    # v0.9.9: Regression force toward original OCEAN (10x weaker than event drive)
+    reg_epsilon = epsilon * 0.1
+
     return BigFiveTraits(
-        openness=step(ocean.openness, epsilon * dp * 0.15),
-        conscientiousness=step(ocean.conscientiousness, epsilon * dd * 0.18),
-        extraversion=step(ocean.extraversion, epsilon * (dp * 0.21 + dd * 0.27)),
-        agreeableness=step(ocean.agreeableness, epsilon * dp * 0.27),
-        neuroticism=step(ocean.neuroticism, epsilon * da * 0.29),
+        openness=step(
+            ocean.openness,
+            epsilon * dp * 0.15
+            + (reg_epsilon * (original_ocean.openness - ocean.openness) if original_ocean else 0.0),
+        ),
+        conscientiousness=step(
+            ocean.conscientiousness,
+            epsilon * dd * 0.18
+            + (reg_epsilon * (original_ocean.conscientiousness - ocean.conscientiousness) if original_ocean else 0.0),
+        ),
+        extraversion=step(
+            ocean.extraversion,
+            epsilon * (dp * 0.21 + dd * 0.27)
+            + (reg_epsilon * (original_ocean.extraversion - ocean.extraversion) if original_ocean else 0.0),
+        ),
+        agreeableness=step(
+            ocean.agreeableness,
+            epsilon * dp * 0.27
+            + (reg_epsilon * (original_ocean.agreeableness - ocean.agreeableness) if original_ocean else 0.0),
+        ),
+        neuroticism=step(
+            ocean.neuroticism,
+            epsilon * da * 0.29
+            + (reg_epsilon * (original_ocean.neuroticism - ocean.neuroticism) if original_ocean else 0.0),
+        ),
     )

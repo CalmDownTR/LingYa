@@ -147,13 +147,36 @@ class BackgroundRunner:
                 )
 
     async def _try_generate_diary(self) -> None:
-        """Stub: diary generation not yet wired to a transcript source.
+        """Generate a diary entry if enough time has passed since the last one.
 
-        TODO: read conversation history from LangGraph checkpoint and
-        pass it to generate_diary().
+        v0.9.9: Reads recent conversation transcript from MindEngine,
+        generates a diary via LLM, and saves to data/diary/YYYY-MM-DD.md.
         """
-        if not getattr(self, "_diary_stub_logged", False):
-            logger.warning(
-                "Diary generation not yet implemented — no transcript source wired"
+        from datetime import date
+
+        from lingya.diary import (
+            generate_diary,
+            get_diary_dir,
+            save_diary,
+            should_generate_diary,
+        )
+
+        diary_dir = get_diary_dir(self._data_dir)
+
+        # Check if a diary is due (default: once per day)
+        if not should_generate_diary(diary_dir, period_days=1):
+            return
+
+        # Get recent conversation transcript from engine
+        transcript = self._engine.get_recent_transcript(hours=24)
+
+        try:
+            content = await generate_diary(
+                model=self._model,
+                mind_config=self._engine.config,
+                transcript=transcript,
             )
-            self._diary_stub_logged = True
+            path = save_diary(diary_dir, date.today(), content)
+            logger.info("Diary generated: %s (%d chars)", path, len(content))
+        except Exception:
+            logger.exception("Diary generation failed — will retry on next tick")

@@ -89,6 +89,8 @@ class MindEngine:
         self.state = MindState.from_config(config)
         self._static_prompt = build_static_prompt(config)
         self._current_tone = config.tone_matrix.model_copy()
+        # v0.9.9: Snapshot of original tone_matrix for evolution cap enforcement
+        self._original_tone_matrix = config.tone_matrix.model_copy()
         self._last_stage: str = "initial"
         self._db = None  # Set after construction for load/save
         self._event_bus = event_bus
@@ -99,6 +101,10 @@ class MindEngine:
         self._importance_pre_sum: float = 0.0
         self._importance_llm_sum: float = 0.0
         self._importance_failure_reasons: list[str] = []  # last 10
+        # Identity reanchor tracking (v0.9.9)
+        self._reanchor_failure_count: int = 0
+        # Conversation turn recording for diary generation (v0.9.9)
+        self._recent_turns: list[dict[str, Any]] = []
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -208,7 +214,41 @@ class MindEngine:
                 self.state.current_ocean = ocean_drift(
                     self.state.current_ocean,
                     self.state.pad_history,
+                    original_ocean=self.state.original_ocean,
                 )
+                # v0.9.9: Log when cumulative drift from original exceeds 0.1
+                if self.state.original_ocean is not None:
+                    drift_magnitude = max(
+                        abs(self.state.current_ocean.openness - self.state.original_ocean.openness),
+                        abs(self.state.current_ocean.conscientiousness - self.state.original_ocean.conscientiousness),
+                        abs(self.state.current_ocean.extraversion - self.state.original_ocean.extraversion),
+                        abs(self.state.current_ocean.agreeableness - self.state.original_ocean.agreeableness),
+                        abs(self.state.current_ocean.neuroticism - self.state.original_ocean.neuroticism),
+                    )
+                    if drift_magnitude > 0.1:
+                        logger.info(
+                            "OCEAN cumulative drift %.3f exceeds 0.1 threshold "
+                            "(original: O=%.2f C=%.2f E=%.2f A=%.2f N=%.2f, "
+                            "current: O=%.2f C=%.2f E=%.2f A=%.2f N=%.2f)",
+                            drift_magnitude,
+                            self.state.original_ocean.openness,
+                            self.state.original_ocean.conscientiousness,
+                            self.state.original_ocean.extraversion,
+                            self.state.original_ocean.agreeableness,
+                            self.state.original_ocean.neuroticism,
+                            self.state.current_ocean.openness,
+                            self.state.current_ocean.conscientiousness,
+                            self.state.current_ocean.extraversion,
+                            self.state.current_ocean.agreeableness,
+                            self.state.current_ocean.neuroticism,
+                        )
+
+            # 7b. Tone matrix evolution (every 10 turns, same cadence as OCEAN drift)
+            #      Drift rate is 1/10 of OCEAN drift rate. Only warmth and
+            #      formality evolve; humor is fixed. Each dimension is capped
+            #      at ±20% of its original value. (v0.9.9)
+            if self.state.turn_counter % 10 == 0 and len(self.state.pad_history) >= 20:
+                self._evolve_tone_matrix()
 
             # 8. Auto-persist
             if self._db is not None:
@@ -335,8 +375,91 @@ class MindEngine:
             "turn_counter": self.state.turn_counter,
         }
 
+    def _evolve_tone_matrix(self) -> None:
+        """Evolve base tone warmth/formality based on long-term PAD average.
+
+        v0.9.9: Drift rate is 1/10 of OCEAN drift rate (~0.0001 per cycle).
+        Only warmth (driven by pleasure) and formality (driven by dominance)
+        evolve on the **base** tone_matrix. compute_dynamic_tone() blends
+        this base with PAD-derived tone each turn, so the base drift
+        gradually shifts the blend anchor.
+
+        Each dimension is capped at ±20% of its original value.
+        Humor is intentionally left fixed.
+        """
+        # Compute long-term PAD average
+        n = len(self.state.pad_history)
+        avg_pleasure = sum(p.pleasure for p in self.state.pad_history) / n
+        avg_dominance = sum(p.dominance for p in self.state.pad_history) / n
+
+        # Tone drift rate: 1/10 of OCEAN drift epsilon
+        tone_epsilon = 0.0001
+
+        # Warmth ← pleasure (positive correlation)
+        warmth_delta = tone_epsilon * avg_pleasure * 100  # Scale to 0-100 range
+        new_warmth = self.config.tone_matrix.warmth + int(round(warmth_delta))
+
+        # Formality ← dominance (positive correlation)
+        formality_delta = tone_epsilon * avg_dominance * 50
+        new_formality = self.config.tone_matrix.formality + int(round(formality_delta))
+
+        # Cap at ±20% of original
+        orig_warmth = self._original_tone_matrix.warmth
+        orig_formality = self._original_tone_matrix.formality
+        warmth_min = max(0, int(orig_warmth * 0.8))
+        warmth_max = min(100, int(orig_warmth * 1.2))
+        formality_min = max(0, int(orig_formality * 0.8))
+        formality_max = min(100, int(orig_formality * 1.2))
+
+        self.config.tone_matrix.warmth = max(warmth_min, min(warmth_max, new_warmth))
+        self.config.tone_matrix.formality = max(formality_min, min(formality_max, new_formality))
+        # Humor intentionally fixed
+
+    # ── Conversation recording for diary generation (v0.9.9) ──────────
+
+    def record_conversation_turn(self, user_msg: str, assistant_msg: str) -> None:
+        """Record a conversation turn for diary generation.
+
+        Stores up to 500 most recent turns as a ring buffer.
+        """
+        import time
+
+        self._recent_turns.append({
+            "user": user_msg,
+            "assistant": assistant_msg,
+            "timestamp": time.time(),
+        })
+        # Ring buffer: cap at 500 turns (~24h of heavy chat)
+        if len(self._recent_turns) > 500:
+            self._recent_turns = self._recent_turns[-500:]
+
+    def get_recent_transcript(self, hours: float = 24) -> str:
+        """Return a formatted transcript of recent conversation turns.
+
+        Only includes turns from the last ``hours`` hours. Returns a
+        placeholder message if no turns are available.
+        """
+        import time
+
+        cutoff = time.time() - hours * 3600
+        recent = [t for t in self._recent_turns if t["timestamp"] >= cutoff]
+
+        if not recent:
+            return "（最近没有对话记录）"
+
+        lines = []
+        for turn in recent:
+            lines.append(f"TR: {turn['user']}")
+            lines.append(f"LingYa: {turn['assistant']}")
+            lines.append("")
+        return "\n".join(lines).strip()
+
     def get_prompt_fragment(self) -> str:
-        """Dynamic per-turn prompt fragment with behavioral directives."""
+        """Dynamic per-turn prompt fragment with behavioral directives.
+
+        v0.9.9: Injects identity reanchor hint when ``reanchor_needed`` is True.
+        The hint is a one-time correction — the flag is cleared after injection.
+        """
         tone = self._current_tone
         pad = self.state.current_pad
 
@@ -361,6 +484,17 @@ class MindEngine:
         }
         stage_hint = stage_hints.get(stage, "")
 
+        # v0.9.9: Identity reanchor — inject hint if previous response drifted
+        reanchor_block = ""
+        if self.state.reanchor_needed and self.state.reanchor_hint:
+            reanchor_block = (
+                f"\n⚠️ [身份重锚指令——最高优先级]\n"
+                f"你上一轮的回复偏离了你的核心身份。请本轮严格遵循以下提醒：\n"
+                f"{self.state.reanchor_hint}\n"
+                f"在保持自然对话的前提下，确保你的回复与你应有的身份一致。"
+            )
+            self.state.reanchor_needed = False
+
         return (
             f"[本次回复的语气指令——请严格遵循]\n"
             f"{warmth_instr}\n"
@@ -368,13 +502,15 @@ class MindEngine:
             f"{humor_instr}\n"
             f"{mood}\n"
             f"{stage_hint}"
+            f"{reanchor_block}"
         ).strip()
 
     async def check_response_alignment(self, response_text: str) -> bool:
         """Check if the response aligns with identity. Triggers reanchor if needed.
 
-        @incomplete: reanchor_hint 尚未注入后续 prompt（v1.0 演化可审查）。
-        reanchor_needed/reanchor_hint 字段被设置但从未被任何代码读取。
+        v0.9.9: Tracks consecutive reanchor failures. After 3 consecutive
+        detections, escalates to ``logger.warning``. A successful alignment
+        check resets the counter.
         """
         if self._embedding_fn is None:
             return True
@@ -385,12 +521,22 @@ class MindEngine:
             self._embedding_fn,
         )
         if needs_reanchor:
+            self._reanchor_failure_count += 1
             self.state.reanchor_needed = True
             self.state.reanchor_hint = await generate_reanchor_hint(
                 self.config.identity.identity,
                 self._llm_call,
             )
+            if self._reanchor_failure_count >= 3:
+                logger.warning(
+                    "Identity re-anchor has failed %s consecutive times — "
+                    "personality may be drifting. Last hint: %s",
+                    self._reanchor_failure_count,
+                    self.state.reanchor_hint[:100],
+                )
             return False
+        # Successful alignment resets the counter
+        self._reanchor_failure_count = 0
         return True
 
     async def reload_config(self, config_partial: dict) -> None:
@@ -408,6 +554,7 @@ class MindEngine:
         if config_partial.get("reset"):
             self.config = self._original_config.model_copy(deep=True)
             self._current_tone = self.config.tone_matrix.model_copy()
+            self._original_tone_matrix = self.config.tone_matrix.model_copy()
             self.state = MindState.from_config(self.config)
             self._static_prompt = build_static_prompt(self.config)
             changed = True
@@ -456,6 +603,7 @@ class MindEngine:
             self.config.tone_matrix.formality = int(preset["formality"])
             self.config.tone_matrix.humor = float(preset["humor"])
             self._current_tone = self.config.tone_matrix.model_copy()
+            self._original_tone_matrix = self.config.tone_matrix.model_copy()
             changed = True
 
         if changed:
@@ -474,11 +622,18 @@ class MindEngine:
         await db.upsert_mind_state(state_json)
 
     async def load_state(self, db) -> bool:
-        """Restore mind state from SQLite. Returns False if no saved state."""
+        """Restore mind state from SQLite. Returns False if no saved state.
+
+        v0.9.9: If the saved state was created before original_ocean existed,
+        snapshots current_ocean as the anchor so drift regression still works.
+        """
         state_json = await db.get_mind_state()
         if state_json is None:
             return False
         self.state = MindState.from_dict(json.loads(state_json))
+        # Backward compat: pre-v0.9.9 states don't have original_ocean
+        if self.state.original_ocean is None:
+            self.state.original_ocean = self.state.current_ocean.model_copy(deep=True)
         return True
 
 
