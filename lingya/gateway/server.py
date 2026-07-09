@@ -194,7 +194,7 @@ def create_app(
 
     @app.get("/mind")
     async def get_mind(
-        query: str = Query("state", description="'state' or 'tone'"),
+        query: str = Query("state", description="'state', 'tone', or 'health'"),
         _auth: bool = auth,
     ):
         if router is None:
@@ -203,6 +203,20 @@ def create_app(
                 status_code=503,
             )
         return await router._handle_mind({"query": query})
+
+    @app.get("/mind/health")
+    async def get_mind_health(_auth: bool = auth):
+        """Return mind engine health metrics (v0.9.8).
+
+        Includes importance scoring success rate, pre-score vs LLM-score
+        averages, and recent failure reasons.
+        """
+        if router is None:
+            return JSONResponse(
+                {"type": "error", "payload": {"message": "Router not initialized"}},
+                status_code=503,
+            )
+        return await router._handle_mind({"query": "health"})
 
     # ── Memory ─────────────────────────────────────────────────────
 

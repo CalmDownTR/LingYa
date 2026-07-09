@@ -131,13 +131,17 @@ class MessageRouter:
         }
 
     async def _handle_mind(self, payload: dict) -> dict:
-        """Return mind state or tone params based on query type."""
+        """Return mind state, tone params, or health based on query type."""
         query = payload.get("query", "state")
         engine = self._engine
 
         if query == "tone":
             tone = engine.get_tone_params()
             return {"type": "mind_state", "payload": {"tone": tone}}
+
+        if query == "health":
+            health = engine.get_health()
+            return {"type": "mind_health", "payload": health}
 
         # Full state dump
         pad = engine.state.current_pad

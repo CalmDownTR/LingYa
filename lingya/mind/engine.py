@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from lingya.mind.affect import evolve_pad, occ_ipc_process, ocean_drift, ocean_to_pad_baseline
 from lingya.mind.config import MindConfig
@@ -89,96 +92,132 @@ class MindEngine:
         self._last_stage: str = "initial"
         self._db = None  # Set after construction for load/save
         self._event_bus = event_bus
+        self._lock = asyncio.Lock()
+        # Importance scoring observability (v0.9.8)
+        self._importance_total: int = 0
+        self._importance_failures: int = 0
+        self._importance_pre_sum: float = 0.0
+        self._importance_llm_sum: float = 0.0
+        self._importance_failure_reasons: list[str] = []  # last 10
 
     # ── Public API ──────────────────────────────────────────────────
 
     async def process_event(self, event: dict[str, Any]) -> None:
-        """Pipeline: OCC+IPC (1 LLM) → PAD → tone → importance (bg) → reflection → drift → save."""
+        """Pipeline: OCC+IPC (1 LLM) → PAD → tone → importance (bg) → reflection → drift → save.
+
+        Lock discipline (v0.9.8): state mutations + save_state run inside
+        ``self._lock``. LLM calls (OCC+IPC, reflection) run outside the
+        lock to avoid blocking streaming output.
+        """
         self.state.turn_counter += 1
 
         # 1. Merged OCC + IPC — single LLM call with 1.5s timeout, neutral fallback
+        #    OUTSIDE lock: LLM call, does not block concurrent idle_tick
         result = await occ_ipc_process(event, self.state.recent_emotions, self._llm_call)
 
-        # 2. Evolve PAD with OCC pull + spring toward OCEAN-derived baseline
-        self.state.current_pad = evolve_pad(
-            self.state.current_pad,
-            result.pad_pull,
-            ocean_to_pad_baseline(self.state.current_ocean),
-        )
-        self.state.pad_history.append(
-            PADPoint(
-                pleasure=self.state.current_pad.pleasure,
-                arousal=self.state.current_pad.arousal,
-                dominance=self.state.current_pad.dominance,
+        # 2-5. State mutations + 6a threshold check INSIDE lock
+        async with self._lock:
+            # 2. Evolve PAD with OCC pull + spring toward OCEAN-derived baseline
+            self.state.current_pad = evolve_pad(
+                self.state.current_pad,
+                result.pad_pull,
+                ocean_to_pad_baseline(self.state.current_ocean),
             )
-        )
-        if len(self.state.pad_history) > 200:
-            self.state.pad_history = self.state.pad_history[-200:]
+            self.state.pad_history.append(
+                PADPoint(
+                    pleasure=self.state.current_pad.pleasure,
+                    arousal=self.state.current_pad.arousal,
+                    dominance=self.state.current_pad.dominance,
+                )
+            )
+            if len(self.state.pad_history) > 200:
+                self.state.pad_history = self.state.pad_history[-200:]
 
-        # Record emotion
-        self.state.recent_emotions.append({
-            "emotion": result.emotion,
-            "intensity": result.intensity,
-            "turn": self.state.turn_counter,
-        })
-        if len(self.state.recent_emotions) > 20:
-            self.state.recent_emotions = self.state.recent_emotions[-20:]
+            # Record emotion
+            self.state.recent_emotions.append({
+                "emotion": result.emotion,
+                "intensity": result.intensity,
+                "turn": self.state.turn_counter,
+            })
+            if len(self.state.recent_emotions) > 20:
+                self.state.recent_emotions = self.state.recent_emotions[-20:]
 
-        # 3. IPC state transition (agency/communion from merged result)
-        target_state = ipc_to_state(result.agency, result.communion)
-        current_ipc = IPCState(self.state.ipc_state)
-        new_ipc = next_ipc_state(current_ipc, target_state)
-        self.state.ipc_agency = result.agency
-        self.state.ipc_communion = result.communion
-        self.state.ipc_state = new_ipc.value
+            # 3. IPC state transition (agency/communion from merged result)
+            target_state = ipc_to_state(result.agency, result.communion)
+            current_ipc = IPCState(self.state.ipc_state)
+            new_ipc = next_ipc_state(current_ipc, target_state)
+            self.state.ipc_agency = result.agency
+            self.state.ipc_communion = result.communion
+            self.state.ipc_state = new_ipc.value
 
-        # 4. Stage detection + dynamic tone (pure compute, no LLM)
-        stage = detect_stage(
-            self.state.turn_counter,
-            self.state.current_pad,
-            self.state.recent_emotions,
-        )
-        self._last_stage = stage.value
-        self._current_tone = compute_dynamic_tone(
-            self.state.current_pad, stage, self.config.tone_matrix,
-            self.state.current_ocean,
-        )
+            # 4. Stage detection + dynamic tone (pure compute, no LLM)
+            stage = detect_stage(
+                self.state.turn_counter,
+                self.state.current_pad,
+                self.state.recent_emotions,
+            )
+            self._last_stage = stage.value
+            self._current_tone = compute_dynamic_tone(
+                self.state.current_pad, stage, self.config.tone_matrix,
+                self.state.current_ocean,
+            )
 
-        # 5. Importance scoring — rule-based pre-score now, LLM refinement in background
-        description = event.get("description", event.get("content", str(event)))
-        pre_score = rule_based_importance(description)
-        entry_id = self.memory.store_with_importance(description, pre_score)
-        self.state.cumulative_importance += pre_score
-        asyncio.create_task(self._deferred_importance_score(description, entry_id))
+            # 5. Importance scoring — rule-based pre-score now, LLM refinement in background
+            description = event.get("description", event.get("content", str(event)))
+            pre_score = rule_based_importance(description)
+            entry_id = self.memory.store_with_importance(description, pre_score)
+            self.state.cumulative_importance += pre_score
+            self._importance_total += 1
+            self._importance_pre_sum += pre_score
+            asyncio.create_task(self._deferred_importance_score(description, entry_id))
 
-        # 6. Reflection check — await result, only reset on success
-        if self.state.cumulative_importance >= self.state.reflection_threshold:
+            # 6a. Check if reflection is needed (capture values for LLM call outside lock)
+            if self.state.cumulative_importance >= self.state.reflection_threshold:
+                _needs_reflection = True
+                _cumulative = self.state.cumulative_importance
+                _threshold = self.state.reflection_threshold
+            else:
+                _needs_reflection = False
+
+        # 6b. Reflection LLM — OUTSIDE lock (may take seconds)
+        if _needs_reflection:
             from lingya.memory.reflection import check_and_reflect
 
             success = await check_and_reflect(
-                self.state.cumulative_importance,
-                self.state.reflection_threshold,
+                _cumulative,
+                _threshold,
                 self.memory,
                 self._llm_call,
             )
-            if success:
+        else:
+            success = False
+
+        # 7-8. Final state mutations + persist INSIDE lock
+        async with self._lock:
+            if _needs_reflection and success:
                 self.state.cumulative_importance = 0.0
-                self.state.reflection_threshold *= 1.1
+                # Cap at 1000 to guarantee at least 1 reflection/year
+                # (50 turns/day × 365 days × average importance 5 ≈ 91,250;
+                #  threshold ÷ 1000 ≈ 91 reflections/year minimum)
+                self.state.reflection_threshold = min(
+                    self.state.reflection_threshold * 1.1, 1000.0
+                )
 
-        # 7. OCEAN drift (every 10 turns, pure compute)
-        if self.state.turn_counter % 10 == 0:
-            self.state.current_ocean = ocean_drift(
-                self.state.current_ocean,
-                self.state.pad_history,
-            )
+            # 7. OCEAN drift (every 10 turns, pure compute)
+            if self.state.turn_counter % 10 == 0:
+                self.state.current_ocean = ocean_drift(
+                    self.state.current_ocean,
+                    self.state.pad_history,
+                )
 
-        # 8. Auto-persist
-        if self._db is not None:
-            await self.save_state(self._db)
+            # 8. Auto-persist
+            if self._db is not None:
+                await self.save_state(self._db)
 
         # OTel span — record PAD/OCEAN/IPC/tone as business attributes.
         # Uses global tracer provider (set by Traceloop.init() in daemon);
         # returns NoOp tracer when otel.enabled=False (zero overhead).
+        # OUTSIDE lock: read-only access to state
         from opentelemetry import trace
 
         tracer = trace.get_tracer("lingya.mind")
@@ -208,40 +247,58 @@ class MindEngine:
         No turn counter increment. No importance scoring. No reflection.
 
         This simulates "nothing happened, mood returns to baseline over time."
+
+        Lock discipline (v0.9.8): all state mutations + save_state run inside
+        ``self._lock`` to prevent races with concurrent ``process_event``.
         """
         from lingya.mind.affect import evolve_pad, ocean_to_pad_baseline
 
-        # Zero emotion pull, tiny spring constant for slow drift
-        zero_pull = PADPoint(pleasure=0.0, arousal=0.0, dominance=0.0)
-        baseline = ocean_to_pad_baseline(self.state.current_ocean)
+        async with self._lock:
+            # Zero emotion pull, tiny spring constant for slow drift
+            zero_pull = PADPoint(pleasure=0.0, arousal=0.0, dominance=0.0)
+            baseline = ocean_to_pad_baseline(self.state.current_ocean)
 
-        self.state.current_pad = evolve_pad(
-            self.state.current_pad,
-            zero_pull,
-            baseline,
-            spring_k=0.01,
-        )
-        self.state.pad_history.append(
-            PADPoint(
-                pleasure=self.state.current_pad.pleasure,
-                arousal=self.state.current_pad.arousal,
-                dominance=self.state.current_pad.dominance,
+            self.state.current_pad = evolve_pad(
+                self.state.current_pad,
+                zero_pull,
+                baseline,
+                spring_k=0.01,
             )
-        )
-        if len(self.state.pad_history) > 200:
-            self.state.pad_history = self.state.pad_history[-200:]
+            self.state.pad_history.append(
+                PADPoint(
+                    pleasure=self.state.current_pad.pleasure,
+                    arousal=self.state.current_pad.arousal,
+                    dominance=self.state.current_pad.dominance,
+                )
+            )
+            if len(self.state.pad_history) > 200:
+                self.state.pad_history = self.state.pad_history[-200:]
 
-        # Auto-persist
-        if self._db is not None:
-            await self.save_state(self._db)
+            # Auto-persist
+            if self._db is not None:
+                await self.save_state(self._db)
 
     async def _deferred_importance_score(self, text: str, entry_id: str) -> None:
-        """Background: score importance with LLM and update stored metadata."""
+        """Background: score importance with LLM and update stored metadata.
+
+        v0.9.8: logs failures and tracks success/failure counts for the
+        ``/mind/health`` endpoint.
+        """
         try:
             score = await self.memory.score_importance(text, self._llm_call)
             self.memory.update_importance(entry_id, score)
-        except Exception:
-            pass  # Rule-based pre-score is sufficient
+            self._importance_llm_sum += score
+        except Exception as exc:
+            self._importance_failures += 1
+            reason = f"{type(exc).__name__}: {exc}"
+            self._importance_failure_reasons.append(reason)
+            if len(self._importance_failure_reasons) > 10:
+                self._importance_failure_reasons = self._importance_failure_reasons[-10:]
+            logger.warning(
+                "Importance LLM scoring failed (entry=%s): %s",
+                entry_id,
+                reason,
+            )
 
     def get_tone_params(self) -> dict[str, float]:
         """Return current dynamic tone parameters for prompt injection."""
@@ -249,6 +306,33 @@ class MindEngine:
             "warmth": float(self._current_tone.warmth),
             "formality": float(self._current_tone.formality),
             "humor": self._current_tone.humor,
+        }
+
+    def get_health(self) -> dict[str, Any]:
+        """Return mind engine health metrics (v0.9.8).
+
+        Includes importance scoring success rate, pre-score vs LLM-score
+        averages, and recent failure reasons.
+        """
+        total = self._importance_total
+        failures = self._importance_failures
+        success_rate = (total - failures) / total if total > 0 else 1.0
+        avg_pre = self._importance_pre_sum / total if total > 0 else 0.0
+        llm_scored = total - failures
+        avg_llm = self._importance_llm_sum / llm_scored if llm_scored > 0 else 0.0
+
+        return {
+            "importance_scoring": {
+                "total": total,
+                "failures": failures,
+                "success_rate": round(success_rate, 4),
+                "avg_pre_score": round(avg_pre, 2),
+                "avg_llm_score": round(avg_llm, 2),
+                "recent_failure_reasons": list(self._importance_failure_reasons),
+            },
+            "reflection_threshold": self.state.reflection_threshold,
+            "cumulative_importance": self.state.cumulative_importance,
+            "turn_counter": self.state.turn_counter,
         }
 
     def get_prompt_fragment(self) -> str:

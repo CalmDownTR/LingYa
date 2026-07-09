@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -547,3 +548,464 @@ class TestReloadConfig:
         assert "warmth" in warm
         assert "formality" in warm
         assert "humor" in warm
+
+
+class TestConcurrencyLock:
+    """Tests for asyncio.Lock protecting state mutations (v0.9.8 #1)."""
+
+    async def test_concurrent_idle_tick_and_process_event_no_lost_updates(
+        self, mind_config, mock_memory
+    ):
+        """Simultaneous idle_tick and process_event must not lose state updates."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "7.0"
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        # Set PAD off-baseline so idle_tick has visible effect
+        from lingya.mind.state import PADPoint
+        engine.state.current_pad = PADPoint(pleasure=0.8, arousal=-0.5, dominance=0.3)
+
+        initial_history_len = len(engine.state.pad_history)
+
+        # Fire process_event and idle_tick concurrently
+        await asyncio.gather(
+            engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": "Concurrent event",
+            }),
+            engine.idle_tick(),
+        )
+
+        # Both should have appended to pad_history (2 new entries)
+        assert len(engine.state.pad_history) == initial_history_len + 2, (
+            f"Expected {initial_history_len + 2} pad_history entries, "
+            f"got {len(engine.state.pad_history)}. Concurrent updates may have been lost."
+        )
+
+    async def test_lock_prevents_race_on_save_state(
+        self, mind_config, mock_memory
+    ):
+        """Lock should ensure save_state completes before the next mutation."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "7.0"
+            return "ok"
+
+        # Use a real async mock DB that tracks call count
+        mock_db = MagicMock()
+        save_call_count = 0
+
+        async def tracked_upsert(state_json: str):
+            nonlocal save_call_count
+            save_call_count += 1
+            # Small delay to simulate I/O
+            await asyncio.sleep(0.001)
+
+        mock_db.upsert_mind_state = tracked_upsert
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.set_db(mock_db)
+
+        # Fire 5 concurrent pairs
+        tasks = []
+        for i in range(5):
+            tasks.append(engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": f"Event {i}",
+            }))
+            tasks.append(engine.idle_tick())
+
+        await asyncio.gather(*tasks)
+
+        # Each process_event saves once, each idle_tick saves once = 10 saves
+        # (reflection doesn't trigger since threshold is 150 and cumulative is small)
+        assert save_call_count == 10, (
+            f"Expected 10 save_state calls, got {save_call_count}"
+        )
+
+    async def test_concurrent_process_events_dont_corrupt_state(
+        self, mind_config, mock_memory
+    ):
+        """Multiple concurrent process_event calls must not corrupt turn_counter."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "5.0"
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+
+        await asyncio.gather(*[
+            engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive" if i % 2 == 0 else "negative",
+                "focus": "self",
+                "description": f"Event {i}",
+            })
+            for i in range(10)
+        ])
+
+        # Turn counter should equal the number of events
+        assert engine.state.turn_counter == 10, (
+            f"Expected turn_counter=10, got {engine.state.turn_counter}"
+        )
+
+
+class TestReflectionThresholdCap:
+    """Tests for reflection_threshold cap at 1000 (v0.9.8 #2)."""
+
+    async def test_threshold_capped_at_1000(
+        self, mind_config, mock_memory
+    ):
+        """After many successful reflections, threshold must not exceed 1000."""
+        from lingya.mind import MindEngine
+
+        async def success_mock(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "5.0"
+            if "guiding questions" in prompt:
+                return "1. How does the user prefer to communicate?\n2. What topics interest the user?"
+            if "self-notion" in prompt:
+                return "User prefers direct communication."
+            return "ok"
+
+        # Make search_weighted return something so reflection succeeds
+        mock_memory.search_weighted = MagicMock(return_value=[
+            {"text": "test memory", "importance": 7.0}
+        ])
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=success_mock,
+        )
+        # Start from a value that would exceed 1000 after 50 reflections
+        # 50 * 1.1 multipliers on 100 → 100 * 1.1^50 ≈ 11,739 without cap
+        engine.state.reflection_threshold = 100.0
+
+        for i in range(60):
+            # Each event: set cumulative high enough to trigger reflection
+            engine.state.cumulative_importance = engine.state.reflection_threshold + 1.0
+            # Temporarily set threshold low enough that cumulative triggers it
+            # The lock in process_event captures threshold before the LLM call,
+            # so set cumulative > threshold for the check to pass
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": f"Reflection cap test {i}",
+            })
+
+        assert engine.state.reflection_threshold <= 1000.0, (
+            f"reflection_threshold {engine.state.reflection_threshold} exceeds cap of 1000"
+        )
+
+    async def test_threshold_respects_cap_boundary(self, mind_config, mock_memory):
+        """Threshold at exactly 1000 should stay at 1000 after next success."""
+        from lingya.mind import MindEngine
+
+        async def success_mock(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "5.0"
+            if "guiding questions" in prompt:
+                return "1. Test question?"
+            if "self-notion" in prompt:
+                return "Test notion."
+            return "ok"
+
+        mock_memory.search_weighted = MagicMock(return_value=[
+            {"text": "test memory", "importance": 7.0}
+        ])
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=success_mock,
+        )
+        # Set threshold near cap
+        engine.state.reflection_threshold = 950.0
+        engine.state.cumulative_importance = 1000.0
+
+        await engine.process_event({
+            "event_type": "outcome",
+            "valence": "positive",
+            "focus": "self",
+            "description": "Cap boundary test",
+        })
+
+        # 950 * 1.1 = 1045 → capped at 1000
+        assert engine.state.reflection_threshold == 1000.0, (
+            f"Expected threshold capped at 1000.0, got {engine.state.reflection_threshold}"
+        )
+
+
+class TestImportanceScoringObservability:
+    """Tests for importance scoring observability (v0.9.8 #3)."""
+
+    async def test_failed_importance_logs_warning_and_counts(self, mind_config, mock_memory):
+        """LLM failure in deferred importance must log warning and increment counter."""
+        from lingya.mind import MindEngine
+
+        async def failing_importance_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                raise RuntimeError("Simulated scoring failure")
+            return "ok"
+
+        # score_importance must be an async mock that raises
+        mock_memory.score_importance = AsyncMock(
+            side_effect=RuntimeError("Simulated scoring failure")
+        )
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=failing_importance_llm,
+        )
+
+        # Process an event — triggers deferred importance scoring
+        await engine.process_event({
+            "event_type": "outcome",
+            "valence": "positive",
+            "focus": "self",
+            "description": "Test event for observability",
+        })
+
+        # Allow the background task to complete
+        await asyncio.sleep(0.1)
+
+        health = engine.get_health()
+        scoring = health["importance_scoring"]
+
+        assert scoring["total"] == 1
+        assert scoring["failures"] == 1
+        assert scoring["success_rate"] == 0.0
+        assert len(scoring["recent_failure_reasons"]) == 1
+        assert "Simulated scoring failure" in scoring["recent_failure_reasons"][0]
+
+    async def test_successful_importance_tracks_llm_score(self, mind_config, mock_memory):
+        """Successful scoring must track pre-score and LLM-score averages."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "8.0"
+            return "ok"
+
+        mock_memory.score_importance = AsyncMock(return_value=8.0)
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+
+        await engine.process_event({
+            "event_type": "outcome",
+            "valence": "positive",
+            "focus": "self",
+            "description": "Test event",
+        })
+
+        # Allow background task to complete
+        await asyncio.sleep(0.1)
+
+        health = engine.get_health()
+        scoring = health["importance_scoring"]
+
+        assert scoring["total"] == 1
+        assert scoring["failures"] == 0
+        assert scoring["success_rate"] == 1.0
+        assert scoring["avg_llm_score"] == 8.0
+
+    async def test_mixed_success_and_failure_tracks_correctly(self, mind_config, mock_memory):
+        """Mix of successes and failures should produce correct aggregate stats."""
+        from lingya.mind import MindEngine
+
+        call_count = 0
+
+        async def flaky_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            return "ok"
+
+        async def flaky_score_importance(text, llm_call):
+            nonlocal call_count
+            call_count += 1
+            if call_count % 2 == 0:  # Even calls fail
+                raise RuntimeError(f"Failure #{call_count}")
+            return 7.0
+
+        mock_memory.score_importance = flaky_score_importance
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=flaky_llm,
+        )
+
+        for i in range(4):
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": f"Event {i}",
+            })
+
+        await asyncio.sleep(0.1)
+
+        health = engine.get_health()
+        scoring = health["importance_scoring"]
+
+        assert scoring["total"] == 4
+        assert scoring["failures"] == 2
+        assert scoring["success_rate"] == 0.5
+        assert len(scoring["recent_failure_reasons"]) == 2
+
+    async def test_failure_reasons_capped_at_10(self, mind_config, mock_memory):
+        """Failure reasons list must not exceed 10 entries."""
+        from lingya.mind import MindEngine
+
+        call_count = 0
+
+        async def always_failing_llm(prompt: str) -> str:
+            nonlocal call_count
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                call_count += 1
+                raise RuntimeError(f"Failure #{call_count}")
+            return "ok"
+
+        mock_memory.score_importance = AsyncMock(
+            side_effect=[RuntimeError(f"Failure #{i}") for i in range(1, 16)]
+        )
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=always_failing_llm,
+        )
+
+        for i in range(15):
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive",
+                "focus": "self",
+                "description": f"Event {i}",
+            })
+
+        await asyncio.sleep(0.2)
+
+        health = engine.get_health()
+        reasons = health["importance_scoring"]["recent_failure_reasons"]
+
+        assert len(reasons) == 10, (
+            f"Failure reasons should be capped at 10, got {len(reasons)}"
+        )
+        # Should contain the most recent failures (6-15)
+        assert "Failure #15" in reasons[-1]
+
+    async def test_get_health_includes_reflection_and_turn_info(self, mind_config, mock_memory):
+        """get_health() must include reflection_threshold, cumulative_importance, turn_counter."""
+        from lingya.mind import MindEngine
+
+        async def mock_llm(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "Score the importance" in prompt:
+                return "6.0"
+            return "ok"
+
+        mock_memory.score_importance = AsyncMock(return_value=6.0)
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        engine.state.turn_counter = 42
+        engine.state.reflection_threshold = 200.0
+        engine.state.cumulative_importance = 75.0
+
+        health = engine.get_health()
+
+        assert health["reflection_threshold"] == 200.0
+        assert health["cumulative_importance"] == 75.0
+        assert health["turn_counter"] == 42
