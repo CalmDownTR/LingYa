@@ -49,5 +49,5 @@ def next_ipc_state(current: IPCState, target: IPCState) -> IPCState:
         return target
     # Invalid direct transition — route through NEUTRAL
     if IPCState.NEUTRAL in valid:
-        return target  # Next turn it'll transition
-    return current
+        return IPCState.NEUTRAL
+    return IPCState.NEUTRAL

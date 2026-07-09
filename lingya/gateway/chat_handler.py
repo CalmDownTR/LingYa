@@ -103,9 +103,6 @@ class ChatHandler:
             t_engine = time.monotonic()
             engine_task = asyncio.create_task(
                 self._engine.process_event({
-                    "event_type": "outcome",
-                    "valence": "neutral",
-                    "focus": "self",
                     "description": user_text,
                     "content": user_text,
                 })
@@ -214,9 +211,6 @@ class ChatHandler:
         # Process through MindEngine
         t_engine = time.monotonic()
         await self._engine.process_event({
-            "event_type": "outcome",
-            "valence": "neutral",
-            "focus": "self",
             "description": user_text,
             "content": user_text,
         })

@@ -127,7 +127,7 @@ class TestMindEngineIdleTick:
         assert len(engine.state.pad_history) == initial_history_len + 1
 
     async def test_idle_tick_trims_pad_history_to_200(self, mind_config, mock_memory_for_engine, noop_llm):
-        """pad_history should not exceed 200 entries after idle ticks."""
+        """pad_history should stay at 200 after exceeding limit (v0.9.7 fix: was 100)."""
         from lingya.mind import MindEngine
 
         engine = MindEngine(
@@ -141,7 +141,8 @@ class TestMindEngineIdleTick:
         ] * 200
 
         await engine.idle_tick()
-        assert len(engine.state.pad_history) == 100  # trimmed to 100 (last 100)
+        # After appending (201 total → trim to 200), should keep last 200
+        assert len(engine.state.pad_history) == 200
 
     async def test_idle_tick_persists_state_when_db_set(self, mind_config, mock_memory_for_engine, noop_llm):
         """idle_tick should auto-persist state when _db is set."""

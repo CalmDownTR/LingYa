@@ -238,23 +238,31 @@ class OCCIPCResult:
 
 
 OCC_IPC_MERGED_PROMPT = """\
-Analyze this event from a conversation and return four numbers:
+Analyze this event from a conversation and return a JSON object with these fields:
 
 Event: {event_description}
 
 Recent emotional context:
 {emotion_context}
 
-1. w_goal (0-1): How relevant is this event to the agent's goals and concerns?
-   0 = completely irrelevant, 1 = critically important
-2. p_expected (0-1): How expected was this event from the agent's perspective?
-   0 = completely surprising, 1 = fully expected
-3. agency (0-1): How much should the agent lead, direct, or assert in response?
-   0 = completely passive/following, 1 = highly directive/assertive
-4. communion (0-1): How much should the agent connect, empathize, or build rapport?
-   0 = cold/distant/formal, 1 = warm/intimate/connected
+Classification fields (for emotion labeling):
+- event_type: "outcome" (something happened to someone), "action" (someone did something), or "object" (attraction/aversion to something)
+- valence: "positive" or "negative" — is this event good or bad from the agent's perspective?
+- focus: "self" (about the agent), "other" (about the user/someone else), or null
+- prospect: "prospective" (about the future), "actual" (about past/present), or null
+- agent: "self" (agent caused it), "other" (user/someone else caused it), or null
 
-Return ONLY a JSON object: {{"w_goal": <float>, "p_expected": <float>, "agency": <float>, "communion": <float>}}"""
+Appraisal fields (for intensity + IPC):
+- w_goal (0-1): How relevant is this event to the agent's goals and concerns?
+  0 = completely irrelevant, 1 = critically important
+- p_expected (0-1): How expected was this event from the agent's perspective?
+  0 = completely surprising, 1 = fully expected
+- agency (0-1): How much should the agent lead, direct, or assert in response?
+  0 = completely passive/following, 1 = highly directive/assertive
+- communion (0-1): How much should the agent connect, empathize, or build rapport?
+  0 = cold/distant/formal, 1 = warm/intimate/connected
+
+Return ONLY a JSON object: {{"event_type": "<string>", "valence": "<string>", "focus": "<string|null>", "prospect": "<string|null>", "agent": "<string|null>", "w_goal": <float>, "p_expected": <float>, "agency": <float>, "communion": <float>}}"""
 
 
 _OCC_IPC_TIMEOUT = 1.5  # seconds
@@ -265,10 +273,12 @@ async def occ_ipc_process(
     recent_emotions: list[dict],
     llm_call: Callable[[str], Awaitable[str]],
 ) -> OCCIPCResult:
-    """Single LLM call for cognitive appraisal + IPC estimation.
+    """Single LLM call for cognitive appraisal + IPC estimation + OCC classification.
 
-    Merges what were previously two serial LLM calls into one.
+    Merges what were previously three serial LLM calls into one.
     Returns OCC results (emotion, intensity, pad_pull) plus IPC axes (agency, communion).
+    The LLM now also returns event_type/valence/focus/prospect/agent so the
+    deterministic OCC decision tree receives correct classification input.
     Falls back to neutral values on timeout or parse error.
     """
     import json
@@ -300,11 +310,30 @@ async def occ_ipc_process(
         p_expected = max(0.0, min(1.0, float(data.get("p_expected", 0.5))))
         agency = max(0.0, min(1.0, float(data.get("agency", 0.5))))
         communion = max(0.0, min(1.0, float(data.get("communion", 0.5))))
+        # Parse OCC classification fields from LLM (v0.9.7 fix: no longer hardcoded)
+        occ_event_type = data.get("event_type", event.get("event_type", "outcome"))
+        occ_valence = data.get("valence", event.get("valence", "neutral"))
+        occ_focus = data.get("focus") or event.get("focus")
+        occ_prospect = data.get("prospect") or event.get("prospect")
+        occ_agent = data.get("agent") or event.get("agent")
     except Exception:
         w_goal, p_expected = 0.3, 0.5
         agency, communion = 0.5, 0.5
+        occ_event_type = event.get("event_type", "outcome")
+        occ_valence = event.get("valence", "neutral")
+        occ_focus = event.get("focus")
+        occ_prospect = event.get("prospect")
+        occ_agent = event.get("agent")
 
-    emotion = occ_classify(event)
+    # Build classified event dict from LLM-returned fields (v0.9.7)
+    classified_event: dict[str, Any] = {
+        "event_type": occ_event_type,
+        "valence": occ_valence,
+        "focus": occ_focus,
+        "prospect": occ_prospect,
+        "agent": occ_agent,
+    }
+    emotion = occ_classify(classified_event)
     intensity = compute_intensity(w_goal, p_expected)
     pull = OCC_EMOTIONS.get(emotion, OCC_EMOTIONS["neutral"])
     pad_pull = PADPoint(

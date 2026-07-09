@@ -35,7 +35,7 @@ async def check_and_reflect(
     threshold: float,
     memory_store: IMemoryStore,
     llm_call: Callable[[str], Awaitable[str]],
-) -> list[str]:
+) -> bool:
     """If cumulative importance >= threshold, run reflection tree.
 
     Steps:
@@ -43,14 +43,18 @@ async def check_and_reflect(
       2. LLM: generate 3 guiding questions
       3. For each question: search_weighted(top_k=20) → abstract 1-2 self-notions
       4. Inject self-notions as importance=9.0 memories
-      5. Return self-notions
+      5. Return True on success, False on failure (so caller can decide rollback)
+
+    Returns:
+        True if reflection succeeded and self-notions were generated,
+        False on any failure (LLM error, no memories, no questions).
     """
     if cumulative_importance < threshold:
-        return []
+        return False
 
     recent = memory_store.search_weighted("user identity preferences personality", top_k=20)
     if not recent:
-        return []
+        return False
 
     memory_text = "\n".join(f"- {m['text']} (importance: {m['importance']:.0f})" for m in recent)
 
@@ -60,7 +64,7 @@ async def check_and_reflect(
             REFLECTION_QUESTIONS_PROMPT.format(memories=memory_text)
         )
     except Exception:
-        return []
+        return False
 
     questions = [
         q.strip("- •0123456789. ").strip()
@@ -69,7 +73,7 @@ async def check_and_reflect(
     ][:3]
 
     if not questions:
-        return []
+        return False
 
     # Step 3: Abstract self-notions for each question
     self_notions: list[str] = []
@@ -95,4 +99,4 @@ async def check_and_reflect(
     for notion in self_notions:
         memory_store.store_with_importance(notion, importance=9.0)
 
-    return self_notions[:5]
+    return len(self_notions) > 0

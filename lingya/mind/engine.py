@@ -113,7 +113,7 @@ class MindEngine:
             )
         )
         if len(self.state.pad_history) > 200:
-            self.state.pad_history = self.state.pad_history[-100:]
+            self.state.pad_history = self.state.pad_history[-200:]
 
         # Record emotion
         self.state.recent_emotions.append({
@@ -151,20 +151,19 @@ class MindEngine:
         self.state.cumulative_importance += pre_score
         asyncio.create_task(self._deferred_importance_score(description, entry_id))
 
-        # 6. Reflection check (fire-and-forget)
+        # 6. Reflection check — await result, only reset on success
         if self.state.cumulative_importance >= self.state.reflection_threshold:
             from lingya.memory.reflection import check_and_reflect
 
-            asyncio.create_task(
-                check_and_reflect(
-                    self.state.cumulative_importance,
-                    self.state.reflection_threshold,
-                    self.memory,
-                    self._llm_call,
-                )
+            success = await check_and_reflect(
+                self.state.cumulative_importance,
+                self.state.reflection_threshold,
+                self.memory,
+                self._llm_call,
             )
-            self.state.cumulative_importance = 0.0
-            self.state.reflection_threshold *= 1.1
+            if success:
+                self.state.cumulative_importance = 0.0
+                self.state.reflection_threshold *= 1.1
 
         # 7. OCEAN drift (every 10 turns, pure compute)
         if self.state.turn_counter % 10 == 0:
@@ -230,7 +229,7 @@ class MindEngine:
             )
         )
         if len(self.state.pad_history) > 200:
-            self.state.pad_history = self.state.pad_history[-100:]
+            self.state.pad_history = self.state.pad_history[-200:]
 
         # Auto-persist
         if self._db is not None:

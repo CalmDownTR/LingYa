@@ -9,11 +9,15 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def mock_llm():
-    """Mock LLM that returns merged OCC+IPC JSON."""
+    """Mock LLM that returns merged OCC+IPC JSON with classification fields (v0.9.7)."""
     async def call(prompt: str) -> str:
         if "w_goal" in prompt and "agency" in prompt:
-            return '{"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
-        if "importance" in prompt:
+            return (
+                '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                '"prospect": null, "agent": null, '
+                '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+            )
+        if "Score the importance" in prompt:
             return "7.0"
         return "ok"
     return call
@@ -186,6 +190,173 @@ class TestMindEngine:
         assert engine.state.turn_counter == 5
         assert len(engine.state.recent_emotions) == 5
         assert len(engine.state.pad_history) == 5
+
+
+class TestIPCStateMachine:
+    """Tests for IPC state transitions (dynamics.py)."""
+
+    def test_legal_transition_works(self):
+        from lingya.mind.dynamics import IPCState, next_ipc_state
+
+        # WARM_LISTENING → NEUTRAL is a legal transition
+        result = next_ipc_state(IPCState.WARM_LISTENING, IPCState.NEUTRAL)
+        assert result == IPCState.NEUTRAL
+
+    def test_illegal_transition_returns_neutral(self):
+        from lingya.mind.dynamics import IPCState, next_ipc_state
+
+        # CRISIS_INTERVENTION → PLAYFUL_COLLABORATION is NOT in the valid set
+        # CRISIS_INTERVENTION valid: {WARM_LISTENING, NEUTRAL, PROFESSIONAL_DEFENSE}
+        # Should route through NEUTRAL
+        result = next_ipc_state(IPCState.CRISIS_INTERVENTION, IPCState.PLAYFUL_COLLABORATION)
+        assert result == IPCState.NEUTRAL, (
+            f"Expected NEUTRAL (routing through NEUTRAL), got {result}"
+        )
+
+    def test_same_state_returns_self(self):
+        from lingya.mind.dynamics import IPCState, next_ipc_state
+
+        result = next_ipc_state(IPCState.PLAYFUL_COLLABORATION, IPCState.PLAYFUL_COLLABORATION)
+        assert result == IPCState.PLAYFUL_COLLABORATION
+
+    def test_neutral_can_reach_playful(self):
+        from lingya.mind.dynamics import IPCState, next_ipc_state
+
+        # NEUTRAL → PLAYFUL_COLLABORATION is legal
+        result = next_ipc_state(IPCState.NEUTRAL, IPCState.PLAYFUL_COLLABORATION)
+        assert result == IPCState.PLAYFUL_COLLABORATION
+
+
+class TestPadHistorySlidingWindow:
+    """Tests for pad_history sliding window fix (v0.9.7 #3)."""
+
+    async def test_pad_history_capped_at_200(self, mind_config, mock_llm, mock_memory):
+        from lingya.mind import MindEngine
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=mock_llm,
+        )
+        # Process 250 events — pad_history should not drop to 100
+        for i in range(250):
+            await engine.process_event({
+                "event_type": "outcome",
+                "valence": "positive" if i % 2 == 0 else "negative",
+                "focus": "self",
+                "description": f"Event {i}",
+            })
+
+        # After 250 events, pad_history should be at most 200 (the window size)
+        # NOT 100 (the buggy truncation)
+        assert len(engine.state.pad_history) <= 200
+        # With the fix, it should hold close to 200 entries (the window)
+        # Before fix: [-100:] means it drops to 100 after exceeding 200
+        assert len(engine.state.pad_history) >= 200, (
+            f"Expected ~200 entries in sliding window, got {len(engine.state.pad_history)}. "
+            f"Bug: [-100:] truncates to half the window."
+        )
+
+
+class TestReflectionFailureRollback:
+    """Tests for reflection failure rollback (v0.9.7 #4)."""
+
+    async def test_failed_reflection_preserves_cumulative_importance(
+        self, mind_config, mock_memory
+    ):
+        """When check_and_reflect fails, cumulative_importance must not reset."""
+        from lingya.mind import MindEngine
+
+        # Mock LLM that fails for reflection
+        async def selective_mock(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "score_importance" in prompt or "Score the importance" in prompt:
+                return "7.0"
+            # Reflection call — simulate failure
+            if "guiding questions" in prompt or "self-notion" in prompt:
+                raise RuntimeError("Simulated LLM failure")
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=selective_mock,
+        )
+        # Set threshold low so reflection triggers immediately
+        engine.state.reflection_threshold = 0.1
+        engine.state.cumulative_importance = 5.0
+
+        # Make search_weighted return something so reflection is attempted
+        mock_memory.search_weighted = MagicMock(return_value=[
+            {"text": "test memory", "importance": 7.0}
+        ])
+
+        await engine.process_event({
+            "event_type": "outcome",
+            "valence": "positive",
+            "focus": "self",
+            "description": "Test event",
+        })
+
+        # After failed reflection, cumulative_importance should NOT be reset to 0
+        assert engine.state.cumulative_importance > 0, (
+            "cumulative_importance was reset even though reflection failed"
+        )
+
+    async def test_successful_reflection_resets_cumulative_importance(
+        self, mind_config, mock_memory
+    ):
+        """When check_and_reflect succeeds, cumulative_importance resets."""
+        from lingya.mind import MindEngine
+
+        async def success_mock(prompt: str) -> str:
+            if "w_goal" in prompt and "agency" in prompt:
+                return (
+                    '{"event_type": "outcome", "valence": "positive", "focus": "self", '
+                    '"prospect": null, "agent": null, '
+                    '"w_goal": 0.5, "p_expected": 0.3, "agency": 0.6, "communion": 0.5}'
+                )
+            if "score_importance" in prompt or "Score the importance" in prompt:
+                return "7.0"
+            if "guiding questions" in prompt:
+                return "1. How does the user prefer to communicate?\n2. What topics interest the user?\n3. How does the user respond to humor?"
+            if "self-notion" in prompt:
+                return "User prefers direct communication."
+            return "ok"
+
+        engine = MindEngine(
+            config=mind_config,
+            memory_store=mock_memory,
+            llm_call=success_mock,
+        )
+        engine.state.reflection_threshold = 0.1
+        engine.state.cumulative_importance = 5.0
+
+        mock_memory.search_weighted = MagicMock(return_value=[
+            {"text": "test memory", "importance": 7.0}
+        ])
+
+        initial_threshold = engine.state.reflection_threshold
+        await engine.process_event({
+            "event_type": "outcome",
+            "valence": "positive",
+            "focus": "self",
+            "description": "Test event",
+        })
+
+        # After successful reflection, cumulative_importance should reset
+        assert engine.state.cumulative_importance < 5.0, (
+            "cumulative_importance was not reset after successful reflection"
+        )
+        # Threshold should increase
+        assert engine.state.reflection_threshold > initial_threshold, (
+            "reflection_threshold was not increased after successful reflection"
+        )
 
 
 class TestReloadConfig:
