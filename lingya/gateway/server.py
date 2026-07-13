@@ -14,6 +14,7 @@ Uses FastAPI (Starlette) + uvicorn. No more hand-rolled RFC 6455.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 
@@ -24,6 +25,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from lingya.gateway.auth import create_auth_dependency
+
+logger = logging.getLogger(__name__)
 
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -163,22 +166,26 @@ def create_app(
                 streamer = chat_handler._chat_streaming
             else:
                 streamer = router._handle_chat_streaming
-            async for event_dict in streamer(
-                messages, config, body.text
-            ):
-                # Inject ws_hop_ms as sse_hop_ms for observability
-                if event_dict.get("type") == "chat_response":
-                    hop_ms = round((time.monotonic() - t_start) * 1000, 1)
-                    event_dict.setdefault("payload", {})["meta"] = {
-                        **(event_dict["payload"].get("meta", {})),
-                        "sse_hop_ms": hop_ms,
-                    }
+            try:
+                async for event_dict in streamer(
+                    messages, config, body.text
+                ):
+                    # Inject ws_hop_ms as sse_hop_ms for observability
+                    if event_dict.get("type") == "chat_response":
+                        hop_ms = round((time.monotonic() - t_start) * 1000, 1)
+                        event_dict.setdefault("payload", {})["meta"] = {
+                            **(event_dict["payload"].get("meta", {})),
+                            "sse_hop_ms": hop_ms,
+                        }
 
-                # Check for client disconnect
-                if await request.is_disconnected():
-                    break
+                    # Check for client disconnect
+                    if await request.is_disconnected():
+                        break
 
-                yield f"data: {json.dumps(event_dict, ensure_ascii=False, default=str)}\n\n"
+                    yield f"data: {json.dumps(event_dict, ensure_ascii=False, default=str)}\n\n"
+            except Exception:
+                logger.exception("SSE streamer crashed — yielding error frame to client")
+                yield f"data: {json.dumps({'type': 'error', 'payload': {'message': '流式响应异常中断，请重试。'}}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             sse_generator(),

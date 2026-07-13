@@ -106,7 +106,12 @@ class BackgroundRunner:
 
             if not self._running:
                 break
-            await self._engine.idle_tick()
+            try:
+                await self._engine.idle_tick()
+            except Exception:
+                logger.exception(
+                    "Heartbeat idle_tick failed — will retry on next tick"
+                )
 
     async def _diary_scheduler_loop(self) -> None:
         """Check if diary is due, generate if so — fire every diary_check_interval seconds."""
@@ -119,7 +124,12 @@ class BackgroundRunner:
             if not self._running:
                 break
 
-            await self._try_generate_diary()
+            try:
+                await self._try_generate_diary()
+            except Exception:
+                logger.exception(
+                    "Diary scheduler failed — will retry on next tick"
+                )
 
     # ── Memory Decay Loop ───────────────────────────────────────────
 

@@ -18,6 +18,7 @@ export function ChatWindow() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [currentPhase, setCurrentPhase] = useState<ProcessPhase | null>(null)
   const [memoryRecall, setMemoryRecall] = useState<MemoryRecallPayload | null>(null)
+  const [chatError, setChatError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { startStream, isStreaming, abort } = useSSE()
   // Track the last thread_id we synced FROM the server, so we can detect
@@ -115,6 +116,7 @@ export function ChatWindow() {
       setStreamingContent('')
       setCurrentPhase(null)
       setMemoryRecall(null)
+      setChatError(null)
 
       let herContent = ''
 
@@ -158,6 +160,7 @@ export function ChatWindow() {
           setStreamingContent('')
           setCurrentPhase(null)
           setMemoryRecall(null)
+          setChatError(err.message || '未知错误，请重试。')
         },
       })
     },
@@ -251,6 +254,15 @@ export function ChatWindow() {
               }}
               isStreaming
             />
+          )}
+
+          {/* Chat error banner — shows backend error messages (stream failures, etc.) */}
+          {chatError && (
+            <div className="flex items-center gap-2 mt-3 px-3 py-2 rounded-[8px]
+                           bg-error/10 border border-error/20 text-error text-[13px]">
+              <AlertCircle size={14} className="flex-shrink-0" />
+              <span style={{ fontVariationSettings: "'wght' 500" }}>{chatError}</span>
+            </div>
           )}
 
           <div ref={messagesEndRef} />

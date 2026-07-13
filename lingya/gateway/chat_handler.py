@@ -89,6 +89,8 @@ class ChatHandler:
             if not (callable(t) and getattr(t, "__name__", "") == "_subagent_factory")
         )
 
+        engine_task: asyncio.Task | None = None
+
         try:
             run = await self._agent.astream_events(
                 {"messages": messages},
@@ -189,9 +191,42 @@ class ChatHandler:
                 },
             }
 
+        except RuntimeError as e:
+            # "v2 stream finished without producing a message" — the underlying
+            # LLM (e.g. DeepSeek) produced zero tokens. Usually transient: rate
+            # limit, model overload, or a network hiccup mid-request.
+            msg = str(e)
+            logger.warning("_chat_streaming: streaming failed (%s)", msg)
+            if engine_task is not None and not engine_task.done():
+                engine_task.cancel()
+            user_msg = (
+                "模型暂时没有返回结果，请稍后重试。"
+                if "without producing a message" in msg
+                else f"流式响应中断：{msg}"
+            )
+            yield {"type": "error", "payload": {"message": user_msg}}
         except Exception as e:
-            logger.exception("_chat_streaming failed")
-            yield {"type": "error", "payload": {"message": str(e)}}
+            # Classify transient errors for user-friendly messages.
+            # LiteLLM MidStreamFallbackError / APIConnectionError = TCP drop
+            # mid-stream (Bad file descriptor, Connection reset, etc.).
+            cls_name = type(e).__name__
+            cls_module = type(e).__module__
+            msg = str(e)
+            if "litellm" in cls_module or "MidStreamFallback" in cls_name or "APIConnection" in cls_name:
+                logger.warning("_chat_streaming: LiteLLM stream error (%s: %s)", cls_name, msg[:200])
+                if engine_task is not None and not engine_task.done():
+                    engine_task.cancel()
+                yield {"type": "error", "payload": {"message": "模型连接中断，请稍后重试。"}}
+            elif "Bad file descriptor" in msg or "Connection" in cls_name:
+                logger.warning("_chat_streaming: connection dropped (%s)", msg[:200])
+                if engine_task is not None and not engine_task.done():
+                    engine_task.cancel()
+                yield {"type": "error", "payload": {"message": "网络连接中断，请稍后重试。"}}
+            else:
+                logger.exception("_chat_streaming failed")
+                if engine_task is not None and not engine_task.done():
+                    engine_task.cancel()
+                yield {"type": "error", "payload": {"message": str(e)}}
         finally:
             self._agent.stream_transformers = _saved_st
 
@@ -218,10 +253,16 @@ class ChatHandler:
 
         # Process through MindEngine
         t_engine = time.monotonic()
-        await self._engine.process_event({
-            "description": user_text,
-            "content": user_text,
-        })
+        try:
+            await asyncio.wait_for(
+                self._engine.process_event({
+                    "description": user_text,
+                    "content": user_text,
+                }),
+                timeout=2.0,
+            )
+        except asyncio.TimeoutError:
+            pass
         engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
         if response_text:
             await self._engine.check_response_alignment(response_text)
