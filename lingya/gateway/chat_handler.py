@@ -81,13 +81,6 @@ class ChatHandler:
 
         accumulated_text = ""
 
-        # Filter out _subagent_factory from compiled stream_transformers
-        _saved_st = self._agent.stream_transformers
-        self._agent.stream_transformers = tuple(
-            t for t in _saved_st
-            if not (callable(t) and getattr(t, "__name__", "") == "_subagent_factory")
-        )
-
         engine_task: asyncio.Task | None = None
 
         try:
@@ -223,8 +216,6 @@ class ChatHandler:
                 if engine_task is not None and not engine_task.done():
                     engine_task.cancel()
                 yield {"type": "error", "payload": {"message": str(e)}}
-        finally:
-            self._agent.stream_transformers = _saved_st
 
     async def _chat_invoke(
         self,

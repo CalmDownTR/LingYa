@@ -66,7 +66,7 @@ class TestDaemonLifecycle:
         )
 
         # Mock ChatOpenAI so _init_model succeeds without an API key.
-        # Also mock create_deep_agent + middleware — the agent isn't exercised
+        # Also mock create_agent + SummarizationMiddleware — the agent isn't exercised
         # by this test (we only ping), but _init_agent still runs the real
         # checkpointer setup (AsyncSqliteSaver.from_conn_string), which is
         # what caught the setup() AttributeError.
@@ -87,10 +87,10 @@ class TestDaemonLifecycle:
             "lingya.app.LiteLLMModel", return_value=mock_model
         ), \
              patch(
-            "lingya.app.create_deep_agent", return_value=MagicMock()
+            "lingya.app.create_agent", return_value=MagicMock()
         ), \
              patch(
-            "lingya.app.create_summarization_tool_middleware",
+            "lingya.app.SummarizationMiddleware",
             return_value=MagicMock(),
         ):
             # Start daemon in background — it blocks on shutdown_event
@@ -177,10 +177,10 @@ class TestDaemonLifecycle:
             "lingya.app.LiteLLMModel", return_value=mock_model
         ), \
              patch(
-            "lingya.app.create_deep_agent", return_value=MagicMock()
+            "lingya.app.create_agent", return_value=MagicMock()
         ), \
              patch(
-            "lingya.app.create_summarization_tool_middleware",
+            "lingya.app.SummarizationMiddleware",
             return_value=MagicMock(),
         ):
             daemon_task = asyncio.create_task(daemon.start())
@@ -310,10 +310,10 @@ class TestSessionLifecycle:
             "lingya.app.LiteLLMModel", return_value=mock_model
         ), \
              patch(
-            "lingya.app.create_deep_agent", return_value=mock_agent
+            "lingya.app.create_agent", return_value=mock_agent
         ), \
              patch(
-            "lingya.app.create_summarization_tool_middleware",
+            "lingya.app.SummarizationMiddleware",
             return_value=MagicMock(),
         ):
             daemon_task = asyncio.create_task(daemon.start())

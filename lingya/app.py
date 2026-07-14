@@ -13,9 +13,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from deepagents import create_deep_agent
-from deepagents.backends import StateBackend
-from deepagents.middleware.summarization import create_summarization_tool_middleware
+from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 
 from lingya.config import Config
 from lingya.events import EventBus
@@ -179,7 +178,7 @@ class ApplicationBuilder:
             await checkpointer.setup()
             self._checkpointer = checkpointer
 
-        # If agent step was called, create the deep agent
+        # If agent step was called, create the agent
         if self._checkpointer is not None:
             memory_tools = []
             if self._memory is not None:
@@ -188,15 +187,16 @@ class ApplicationBuilder:
             # MCP tools: not yet wired (see v2.0 Plugin system)
             mcp_tools: list = []
 
-            backend = StateBackend()
-            self._agent = create_deep_agent(
+            self._agent = create_agent(
                 model=self._model,
                 tools=[*mcp_tools, *memory_tools, *self._extra_tools],
                 middleware=[
-                    create_summarization_tool_middleware(self._model, backend=backend),
+                    SummarizationMiddleware(
+                        model=self._model,
+                        trigger=("fraction", 0.8),
+                    ),
                 ],
                 system_prompt=self._static_prompt,
-                backend=backend,
                 checkpointer=self._checkpointer,
             )
 
