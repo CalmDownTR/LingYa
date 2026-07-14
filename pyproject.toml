@@ -42,6 +42,8 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "integration: integration tests that require real infrastructure (DB, WS server, ports)",
+    "slow: slow tests that make real LLM calls (needs DEEPSEEK_API_KEY)",
+    "e2e: end-to-end tests exercising the full pipeline with real LLM",
 ]
 
 [dependency-groups]

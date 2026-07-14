@@ -92,11 +92,33 @@ class LiteLLMModel(BaseChatModel):
 
             entry = {"role": role, "content": self._extract_text_content(msg.content)}
 
-            # Preserve tool_calls on AIMessage for function calling
+            # Preserve tool_calls on AIMessage for function calling.
+            # LangChain stores tool_calls in a flat dict format:
+            #   {"name": ..., "args": {...}, "id": "...", "type": "tool_call"}
+            # Every OpenAI-compatible API expects the nested format:
+            #   {"type": "function", "id": "...", "function": {"name": ..., "arguments": "..."}}
+            # Normalize here so LiteLLM passes them through without rejection.
             if isinstance(msg, AIMessage):
                 tc = getattr(msg, "tool_calls", None)
                 if tc:
-                    entry["tool_calls"] = tc
+                    import json as _json
+
+                    normalized = []
+                    for t in tc:
+                        t = dict(t)
+                        if "function" not in t:
+                            # Flat LangChain format → nested OpenAI format
+                            fn_name = t.pop("name", "")
+                            fn_args = t.pop("args", {})
+                            t["type"] = "function"
+                            t["function"] = {
+                                "name": fn_name,
+                                "arguments": fn_args if isinstance(fn_args, str) else _json.dumps(fn_args, ensure_ascii=False),
+                            }
+                        elif t.get("type") == "tool_call":
+                            t["type"] = "function"
+                        normalized.append(t)
+                    entry["tool_calls"] = normalized
 
             result.append(entry)
         return result

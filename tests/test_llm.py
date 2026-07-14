@@ -136,7 +136,7 @@ class TestToLitellmMessages:
         assert result[0]["tool_call_id"] == "call_123"
 
     def test_aimessage_with_tool_calls(self):
-        """AIMessage with tool_calls should preserve them."""
+        """AIMessage with tool_calls — normalized to OpenAI format."""
         from lingya.llm import LiteLLMModel
 
         model = LiteLLMModel()
@@ -147,9 +147,12 @@ class TestToLitellmMessages:
         assert len(result) == 1
         assert result[0]["role"] == "assistant"
         assert result[0]["content"] == "Let me search"
-        # AIMessage auto-adds type='tool_call' to each dict
-        assert result[0]["tool_calls"][0]["name"] == "search"
-        assert result[0]["tool_calls"][0]["id"] == "call_1"
+        # Flat LangChain format → nested OpenAI format
+        tc = result[0]["tool_calls"][0]
+        assert tc["type"] == "function"
+        assert tc["id"] == "call_1"
+        assert tc["function"]["name"] == "search"
+        assert tc["function"]["arguments"] == '{"query": "hi"}'
 
     def test_aimessage_without_tool_calls(self):
         """AIMessage without tool_calls should not have tool_calls key."""
@@ -181,7 +184,9 @@ class TestToLitellmMessages:
         assert result[0] == {"role": "user", "content": "search for hi"}
         assert result[1]["role"] == "assistant"
         assert result[1]["content"] == ""
-        assert result[1]["tool_calls"][0]["name"] == "search"
+        tc = result[1]["tool_calls"][0]
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "search"
         assert result[2] == {"role": "tool", "content": "found it", "tool_call_id": "c1"}
 
 
