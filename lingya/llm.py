@@ -9,11 +9,12 @@ abstraction layer.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any, Callable
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.tools import BaseTool
 from pydantic import Field
@@ -33,9 +34,34 @@ class LiteLLMModel(BaseChatModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=32768, gt=0)
     fallbacks: list[str] = Field(default_factory=list)
+    # Pin to plain-string content. This prevents LangChain's v1 content_blocks
+    # format from leaking into the response and keeps message history as simple
+    # strings that the frontend can render directly.
+    output_version: str | None = Field(default="v0")
 
     # Allow extra fields set by ApplicationBuilder (e.g. "profile")
     model_config = {"extra": "allow"}
+
+    @staticmethod
+    def _extract_text_content(content: str | list | Any) -> str:
+        """Normalize message content to a plain string.
+
+        Handles the common cases:
+        - plain string -> returned as-is
+        - list of content blocks -> concatenate text blocks
+        - anything else -> str()
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts) if parts else str(content)
+        return str(content) if content is not None else ""
 
     def _to_litellm_messages(self, messages: list[BaseMessage]) -> list[dict[str, Any]]:
         """Convert LangChain messages to litellm dict format.
@@ -55,7 +81,7 @@ class LiteLLMModel(BaseChatModel):
             elif isinstance(msg, ToolMessage):
                 entry: dict[str, Any] = {
                     "role": "tool",
-                    "content": msg.content if isinstance(msg.content, str) else str(msg.content),
+                    "content": self._extract_text_content(msg.content),
                 }
                 if hasattr(msg, "tool_call_id") and msg.tool_call_id:
                     entry["tool_call_id"] = msg.tool_call_id
@@ -64,8 +90,7 @@ class LiteLLMModel(BaseChatModel):
             else:
                 role = getattr(msg, "type", "user")
 
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            entry = {"role": role, "content": content}
+            entry = {"role": role, "content": self._extract_text_content(msg.content)}
 
             # Preserve tool_calls on AIMessage for function calling
             if isinstance(msg, AIMessage):
@@ -114,7 +139,7 @@ class LiteLLMModel(BaseChatModel):
             **kwargs,
         )
         choice = response.choices[0]
-        content = choice.message.content or ""
+        content = self._extract_text_content(choice.message.content)
         message = AIMessage(content=content)
         generation = ChatGeneration(message=message)
         return ChatResult(generations=[generation])
@@ -157,10 +182,91 @@ class LiteLLMModel(BaseChatModel):
             **kwargs,
         )
         for chunk in response:
-            delta = chunk.choices[0].delta
-            content = delta.content or ""
-            if content:
-                yield ChatGenerationChunk(message=AIMessageChunk(content=content))
+            gen_chunk = self._litellm_chunk_to_generation_chunk(chunk)
+            msg = gen_chunk.message
+            if msg.content or getattr(msg, "tool_call_chunks", None):
+                yield gen_chunk
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """Stream chunks asynchronously via litellm.acompletion with stream=True."""
+        import litellm
+
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
+        litellm_messages = self._to_litellm_messages(messages)
+
+        tools = getattr(self, "_bound_tools", None)
+        if tools:
+            openai_tools = [convert_to_openai_tool(t) for t in tools]
+            kwargs.setdefault("tools", openai_tools)
+            tool_choice = getattr(self, "_bound_tools_kwargs", {}).get("tool_choice", "auto")
+            kwargs.setdefault("tool_choice", tool_choice)
+
+        if self.fallbacks:
+            kwargs.setdefault("fallbacks", self.fallbacks)
+
+        response = await litellm.acompletion(
+            model=self.model,
+            messages=litellm_messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stop=stop,
+            stream=True,
+            num_retries=2,
+            **kwargs,
+        )
+        async for chunk in response:
+            gen_chunk = self._litellm_chunk_to_generation_chunk(chunk)
+            msg = gen_chunk.message
+            if msg.content or getattr(msg, "tool_call_chunks", None):
+                yield gen_chunk
+
+    def _litellm_chunk_to_generation_chunk(self, chunk: Any) -> ChatGenerationChunk:
+        """Convert a single litellm/OpenAI streaming chunk to a LangChain chunk.
+
+        Preserves text deltas, tool-call deltas, and provider-specific fields
+        such as DeepSeek's ``reasoning_content``.
+        """
+        delta = chunk.choices[0].delta
+        content = self._extract_text_content(getattr(delta, "content", None))
+
+        tool_call_chunks = []
+        raw_tool_calls = getattr(delta, "tool_calls", None)
+        if raw_tool_calls and isinstance(raw_tool_calls, list):
+            for raw_tc in raw_tool_calls:
+                try:
+                    tc = raw_tc if isinstance(raw_tc, dict) else raw_tc.model_dump()
+                    fn = tc.get("function", {}) or {}
+                    tool_call_chunks.append(
+                        tool_call_chunk(
+                            name=fn.get("name"),
+                            args=fn.get("arguments"),
+                            id=tc.get("id"),
+                            index=tc.get("index"),
+                        )
+                    )
+                except Exception:
+                    # Malformed tool-call deltas should not break the stream.
+                    pass
+
+        additional_kwargs: dict[str, Any] = {}
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning:
+            additional_kwargs["reasoning_content"] = reasoning
+
+        return ChatGenerationChunk(
+            message=AIMessageChunk(
+                content=content,
+                additional_kwargs=additional_kwargs,
+                tool_call_chunks=tool_call_chunks,
+            )
+        )
 
     def bind_tools(
         self,
