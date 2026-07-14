@@ -1,7 +1,7 @@
 """ApplicationBuilder — assemble the LingYa application from components.
 
 Replaces the God-class GatewayDaemon assembly with a typed builder chain.
-Used by both Gateway mode (daemon) and Direct mode (CLI).
+Used by Gateway mode (daemon). CLI direct mode was removed in v0.9.4.
 """
 
 from __future__ import annotations
