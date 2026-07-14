@@ -84,7 +84,7 @@ class TestChatEndpoint:
             {"type": "event", "event": "process.phase", "payload": {"phase": "thinking"}},
             {"type": "event", "event": "chat.delta", "payload": {"content": "Hello"}},
             {"type": "event", "event": "mind.transition", "payload": {"pad": {"pleasure": 0.5, "arousal": 0.3, "dominance": 0.7}}},
-            {"type": "chat_response", "payload": {"text": "Hello", "tone": {}, "meta": {}}},
+            {"type": "chat_response", "payload": {"text": "Hello", "tone": {}}},
         ]
         router._handle_chat_streaming.return_value = _make_stream_events(events)
 
@@ -108,7 +108,6 @@ class TestChatEndpoint:
         # Last event (final response)
         e4 = json.loads(lines[3][6:])
         assert e4["type"] == "chat_response"
-        assert "sse_hop_ms" in e4["payload"]["meta"]
 
     def test_chat_includes_system_fragment(self):
         """When engine provides a prompt fragment, it's included in messages."""
@@ -119,7 +118,7 @@ class TestChatEndpoint:
         router._thread_id = "test-thread"
 
         events = [
-            {"type": "chat_response", "payload": {"text": "OK", "tone": {}, "meta": {}}},
+            {"type": "chat_response", "payload": {"text": "OK", "tone": {}}},
         ]
         router._handle_chat_streaming.return_value = _make_stream_events(events)
 

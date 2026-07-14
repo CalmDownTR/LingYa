@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -102,7 +101,6 @@ class ChatHandler:
             # Start MindEngine processing concurrently — runs while LLM streams.
             # process_event does 1 LLM call (affect.py:_OCC_IPC_TIMEOUT=1.5s)
             # + DB save + event publish.
-            t_engine = time.monotonic()
             engine_task = asyncio.create_task(
                 self._engine.process_event({
                     "description": user_text,
@@ -140,7 +138,6 @@ class ChatHandler:
                 await asyncio.wait_for(engine_task, timeout=2.0)
             except asyncio.TimeoutError:
                 pass
-            engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
 
             # Fire-and-forget: response alignment check runs in background.
             if accumulated_text:
@@ -187,7 +184,6 @@ class ChatHandler:
                         else self._session_service._extract_text_content_from_value(accumulated_text)
                     ),
                     "tone": self._engine.get_tone_params(),
-                    "meta": {"engine_ms": engine_ms},
                 },
             }
 
@@ -252,7 +248,6 @@ class ChatHandler:
         )
 
         # Process through MindEngine
-        t_engine = time.monotonic()
         try:
             await asyncio.wait_for(
                 self._engine.process_event({
@@ -263,7 +258,6 @@ class ChatHandler:
             )
         except asyncio.TimeoutError:
             pass
-        engine_ms = round((time.monotonic() - t_engine) * 1000, 1)
         if response_text:
             await self._engine.check_response_alignment(response_text)
 
@@ -275,6 +269,5 @@ class ChatHandler:
             "payload": {
                 "text": response_text,
                 "tone": self._engine.get_tone_params(),
-                "meta": {"engine_ms": engine_ms},
             },
         }

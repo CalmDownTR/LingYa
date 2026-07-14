@@ -91,6 +91,5 @@ export interface ChatResponsePayload {
   payload: {
     text: string
     tone: { warmth: number; formality: number; humor: number }
-    meta: { engine_ms: number }
   }
 }

@@ -182,7 +182,6 @@ class TestHandleChatStreaming:
         assert result["type"] == "chat_response"
         assert result["payload"]["text"] == "你好！"
         assert "tone" in result["payload"]
-        assert "meta" in result["payload"]
 
 
 @pytest.mark.asyncio

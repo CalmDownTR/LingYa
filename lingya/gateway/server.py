@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
@@ -160,7 +159,6 @@ def create_app(
 
         async def sse_generator():
             """Iterate the streaming generator and emit SSE frames."""
-            t_start = time.monotonic()
             # ChatHandler uses _chat_streaming, legacy router uses _handle_chat_streaming
             if chat_handler is not None:
                 streamer = chat_handler._chat_streaming
@@ -170,14 +168,6 @@ def create_app(
                 async for event_dict in streamer(
                     messages, config, body.text
                 ):
-                    # Inject ws_hop_ms as sse_hop_ms for observability
-                    if event_dict.get("type") == "chat_response":
-                        hop_ms = round((time.monotonic() - t_start) * 1000, 1)
-                        event_dict.setdefault("payload", {})["meta"] = {
-                            **(event_dict["payload"].get("meta", {})),
-                            "sse_hop_ms": hop_ms,
-                        }
-
                     # Check for client disconnect
                     if await request.is_disconnected():
                         break
