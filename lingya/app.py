@@ -17,6 +17,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
 
 from lingya.config import Config
+from lingya.middleware import LingYaStreamMiddleware
 from lingya.events import EventBus
 from lingya.llm import LiteLLMModel
 from lingya.memory import EnhancedMemoryStore
@@ -191,6 +192,7 @@ class ApplicationBuilder:
                 model=self._model,
                 tools=[*mcp_tools, *memory_tools, *self._extra_tools],
                 middleware=[
+                    LingYaStreamMiddleware(),
                     SummarizationMiddleware(
                         model=self._model,
                         trigger=("fraction", 0.8),

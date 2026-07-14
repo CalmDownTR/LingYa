@@ -77,8 +77,6 @@ class ChatHandler:
         user_text: str,
     ):
         """Run agent via astream_events and yield streaming events + final response."""
-        from lingya.transformers import create_lingya_transformer
-
         accumulated_text = ""
 
         engine_task: asyncio.Task | None = None
@@ -88,7 +86,6 @@ class ChatHandler:
                 {"messages": messages},
                 config,
                 version="v3",
-                transformers=[create_lingya_transformer],
             )
 
             # Start MindEngine processing concurrently — runs while LLM streams.
@@ -118,7 +115,11 @@ class ChatHandler:
                                     "payload": {"content": chunk},
                                 }
 
-                elif method == "lingya_inner":
+                # LingYa domain events from the named StreamChannel("lingya_inner").
+                # Must accept both the legacy method name and the documented
+                # "custom:<name>" prefix to stay forward-compatible with
+                # LangGraph changes to named-channel protocol-event naming.
+                elif method in ("lingya_inner", "custom:lingya_inner"):
                     inner_event = event["params"]["data"]
                     yield {
                         "type": "event",
