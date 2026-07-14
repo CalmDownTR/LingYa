@@ -318,7 +318,7 @@ MEMORY_DECAYED = "memory_decayed"           # 记忆衰减后
 | 层 | 技术 | 版本/备注 |
 |----|------|-----------|
 | 语言 | Python | ≥3.12 |
-| Agent 框架 | DeepAgents | create_deep_agent + StateBackend + SummarizationToolMiddleware；基于 LangGraph (>=1.2.7)，支持 stream_events(v3)；langchain>=1.3.1, langchain-core>=1.4.8 |
+| Agent 框架 | LangChain create_agent | create_agent + SummarizationMiddleware；基于 LangGraph (>=1.2.7)，支持 stream_events(v3)；langchain>=1.3.1, langchain-core>=1.4.8 |
 | LLM | DeepSeek（默认）/ OpenAI / Ollama / 100+ provider | LiteLLMModel(BaseChatModel) 适配 litellm.completion()；model name 格式 `provider/model_name` |
 | 对话持久化 | LangGraph Checkpointer | AsyncSqliteSaver（SQLite） |
 | 向量存储 | ChromaDB | PersistentClient，内置 embedding |
@@ -413,8 +413,8 @@ v0.9.4（最后更新：2026-07-06）
 ### v0.9.3 已完成（2026-07-04）
 
 - 新增 `lingya/llm.py` — `LiteLLMModel(BaseChatModel)` 适配 litellm.completion()，支持 100+ provider。`ApplicationBuilder.with_model()` 切换为 `LiteLLMModel`。
-- `LiteLLMModel.bind_tools()` 实现（满足 `create_deep_agent` 要求）+ `_stream()` 返回类型修正（`ChatGenerationChunk`）。
-- LingYaStreamingMiddleware 回退（ADR-004 Amendment 2）：transformer 恢复为 `astream_events(transformers=[...])` 内联传递。新增 `_subagent_factory` 过滤 workaround（router.py save/restore 模式）。
+- `LiteLLMModel.bind_tools()` 实现（满足 LangChain `create_agent` 要求）+ `_stream()` 返回类型修正（`ChatGenerationChunk`）。
+- LingYaStreamingMiddleware 回退（ADR-004 Amendment 2）：transformer 恢复为 `astream_events(transformers=[...])` 内联传递。`_subagent_factory` 过滤 workaround 于 v1.0 移除（deepagents 替换为 LangChain create_agent）。
 - `MessageRouter` 新增 `_extract_text_content()` / `_extract_text_content_from_value()` 静态方法，处理 LangChain AIMessage.content 返回 ContentBlock list 的情况。覆盖 `_handle_chat_invoke` / `_handle_chat_streaming` / `_load_history` 三条路径。
 - 新增 Web UI `PhaseIndicator.tsx` 组件 — recalling/thinking/generating 三阶段动画 + 记忆召回计数。
 - 前端 `MessageBubble.tsx` 防御性解析 ContentBlock 格式。

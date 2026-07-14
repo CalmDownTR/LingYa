@@ -1,7 +1,7 @@
 """Memory tools — decoupled from daemon assembly.
 
 create_memory_tools(memory_store) returns a list of @tool-decorated functions
-ready for registration with create_deep_agent.
+ready for registration with create_agent.
 """
 
 from __future__ import annotations
