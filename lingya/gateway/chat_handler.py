@@ -80,6 +80,7 @@ class ChatHandler:
         accumulated_text = ""
 
         engine_task: asyncio.Task | None = None
+        ext_drainer: asyncio.Task | None = None
 
         try:
             run = await self._agent.astream_events(
@@ -98,7 +99,28 @@ class ChatHandler:
                 })
             )
 
+            # LingYa domain events via stream.extensions — consume the typed
+            # projection alongside the main event loop using a queue bridge.
+            # This is the idiomatic LangGraph pattern (see event-streaming docs:
+            # "Multiple projections" with asyncio.gather / queue bridge).
+            lingya_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+            async def _drain_lingya_extensions() -> None:
+                async for item in run.extensions["lingya_inner"]:
+                    await lingya_queue.put(item)
+
+            ext_drainer = asyncio.create_task(_drain_lingya_extensions())
+
             async for event in run:
+                # Drain pending LingYa domain events before each main event
+                while not lingya_queue.empty():
+                    inner_event = lingya_queue.get_nowait()
+                    yield {
+                        "type": "event",
+                        "event": inner_event["type"],
+                        "payload": inner_event["payload"],
+                    }
+
                 method = event["method"]
 
                 if method == "messages":
@@ -115,17 +137,15 @@ class ChatHandler:
                                     "payload": {"content": chunk},
                                 }
 
-                # LingYa domain events from the named StreamChannel("lingya_inner").
-                # Must accept both the legacy method name and the documented
-                # "custom:<name>" prefix to stay forward-compatible with
-                # LangGraph changes to named-channel protocol-event naming.
-                elif method in ("lingya_inner", "custom:lingya_inner"):
-                    inner_event = event["params"]["data"]
-                    yield {
-                        "type": "event",
-                        "event": inner_event["type"],
-                        "payload": inner_event["payload"],
-                    }
+            # Final drain: any LingYa events that arrived after the last main event
+            await ext_drainer
+            while not lingya_queue.empty():
+                inner_event = lingya_queue.get_nowait()
+                yield {
+                    "type": "event",
+                    "event": inner_event["type"],
+                    "payload": inner_event["payload"],
+                }
 
             # Wait for engine — 2.0s covers 1.5s LLM timeout + 0.5s persistence.
             try:
@@ -189,6 +209,8 @@ class ChatHandler:
             logger.warning("_chat_streaming: streaming failed (%s)", msg)
             if engine_task is not None and not engine_task.done():
                 engine_task.cancel()
+            if ext_drainer is not None and not ext_drainer.done():
+                ext_drainer.cancel()
             user_msg = (
                 "模型暂时没有返回结果，请稍后重试。"
                 if "without producing a message" in msg
@@ -206,16 +228,22 @@ class ChatHandler:
                 logger.warning("_chat_streaming: LiteLLM stream error (%s: %s)", cls_name, msg[:200])
                 if engine_task is not None and not engine_task.done():
                     engine_task.cancel()
+                if ext_drainer is not None and not ext_drainer.done():
+                    ext_drainer.cancel()
                 yield {"type": "error", "payload": {"message": "模型连接中断，请稍后重试。"}}
             elif "Bad file descriptor" in msg or "Connection" in cls_name:
                 logger.warning("_chat_streaming: connection dropped (%s)", msg[:200])
                 if engine_task is not None and not engine_task.done():
                     engine_task.cancel()
+                if ext_drainer is not None and not ext_drainer.done():
+                    ext_drainer.cancel()
                 yield {"type": "error", "payload": {"message": "网络连接中断，请稍后重试。"}}
             else:
                 logger.exception("_chat_streaming failed")
                 if engine_task is not None and not engine_task.done():
                     engine_task.cancel()
+                if ext_drainer is not None and not ext_drainer.done():
+                    ext_drainer.cancel()
                 yield {"type": "error", "payload": {"message": str(e)}}
 
     async def _chat_invoke(

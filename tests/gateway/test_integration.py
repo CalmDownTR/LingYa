@@ -267,6 +267,8 @@ class TestSessionLifecycle:
         async def _mock_astream_events(*args, **kwargs):
             from langchain_core.messages import AIMessage
 
+            from tests.gateway.conftest import MockStreamRun
+
             messages = args[0].get("messages", [])
             thread_id = args[1].get("configurable", {}).get("thread_id", "unknown")
             accumulated = "Hello from LingYa"
@@ -275,17 +277,19 @@ class TestSessionLifecycle:
             saved = list(messages) + [AIMessage(content=accumulated)]
             _fake_state[thread_id] = saved
 
-            async def _stream():
-                yield {
-                    "method": "messages",
-                    "params": {
-                        "data": (
-                            {"event": "content-block-delta", "delta": {"type": "text-delta", "text": accumulated}},
-                            {},
-                        ),
-                    },
-                }
-            return _stream()
+            return MockStreamRun(
+                main_events=[
+                    {
+                        "method": "messages",
+                        "params": {
+                            "data": (
+                                {"event": "content-block-delta", "delta": {"type": "text-delta", "text": accumulated}},
+                                {},
+                            ),
+                        },
+                    }
+                ],
+            )
 
         async def _mock_aget_state(config):
             thread_id = config.get("configurable", {}).get("thread_id", "")

@@ -2,9 +2,50 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+
+class MockStreamRun:
+    """Mock ``AsyncGraphRunStream`` for tests that consume ``stream.extensions``.
+
+    The production ``_chat_streaming`` uses two async iterables concurrently:
+    the main event loop (``async for event in run``) and the LingYa extension
+    channel (``async for item in run.extensions["lingya_inner"]``).  This
+    class wraps two lists into a single object that satisfies both protocols.
+    """
+
+    def __init__(
+        self,
+        main_events: list[dict[str, Any]],
+        extensions: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
+        self._main_events = main_events
+        self._ext_events = extensions or {}
+        self.extensions = self._Extensions(self._ext_events)
+
+    def __aiter__(self):
+        return self._make_async_gen(self._main_events)
+
+    @staticmethod
+    async def _make_async_gen(items: list[dict[str, Any]]):
+        for item in items:
+            yield item
+
+    class _Extensions:
+        def __init__(self, events_map: dict[str, list[dict[str, Any]]]) -> None:
+            self._events_map = events_map
+
+        def __getitem__(self, key: str):
+            events = self._events_map.get(key, [])
+
+            async def _gen():
+                for e in events:
+                    yield e
+
+            return _gen()
 
 
 @pytest.fixture
